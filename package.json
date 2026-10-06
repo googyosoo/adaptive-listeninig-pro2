@@ -2,10 +2,13 @@
   "name": "adaptive-listening-pro2",
   "private": true,
   "version": "0.0.0",
+  "homepage": "https://googyosoo.github.io/adaptive-listeninig-pro2/",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -23,6 +26,7 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.6.1",
+    "gh-pages": "^6.3.0",
     "oxlint": "^1.81.0",
     "postcss": "^8.5.29",
     "tailwindcss": "^4.3.3",
