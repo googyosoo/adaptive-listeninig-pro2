@@ -77,6 +77,7 @@ import { RadarChartWidget } from './components/RadarChartWidget';
       const [seTeukResult, setSeTeukResult] = useState({});
       const [seTeukLoadingId, setSeTeukLoadingId] = useState(null);
       const [activeSeTeukStudent, setActiveSeTeukStudent] = useState(null);
+      const [selectedFeedbackModal, setSelectedFeedbackModal] = useState(null); // 교사용 학생 피드백 전문 열람 모달
       
       // 실전 평가 제어 상태 (1단계 고도화)
       const [playCountMap, setPlayCountMap] = useState({}); // { [itemId]: count }
@@ -2101,15 +2102,15 @@ ${detailedStats}
 
         setAiFeedback(generatedFeedback);
 
-        localStorage.setItem('english_canvas_wrong_records', JSON.stringify(newWrongs));
+        const submitTimeStr = new Date().toLocaleString('ko-KR');
         setWrongRecords(newWrongs);
-        setScoreInfo({ correctMcCount: correctMc, correctSaCount: correctSa, detailedResults: detailed, totalScore: currentScore, maxScore });
+        setScoreInfo({ correctMcCount: correctMc, correctSaCount: correctSa, detailedResults: detailed, totalScore: currentScore, maxScore, submittedAt: submitTimeStr });
         
         // 학생 제출 데이터 브라우저 로컬 비상 백업 (네트워크 단절 대비)
         try {
           const backupItem = {
             id: Date.now(),
-            timestamp: new Date().toLocaleString('ko-KR'),
+            timestamp: submitTimeStr,
             studentInfo: { ...studentInfo },
             totalScore: currentScore,
             maxScore,
@@ -2168,9 +2169,33 @@ ${detailedStats}
                 }
               });
             });
-            setStudentStats({ totalExams: myData.length, totalQuestions: questionCount, correctQuestions: correctCount });
+            let lastTime = '';
+            if (myData.length > 0) {
+              const lastRow = myData[myData.length - 1];
+              lastTime = lastRow['timestamp'] || lastRow['제출시간'] || '';
+            }
+            if (!lastTime) {
+              try {
+                const history = JSON.parse(localStorage.getItem('english_canvas_exam_history') || '[]');
+                if (history.length > 0) lastTime = history[0].timestamp || '';
+              } catch(e){}
+            }
+            setStudentStats({ 
+              totalExams: myData.length, 
+              totalQuestions: questionCount, 
+              correctQuestions: correctCount,
+              lastSubmittedAt: lastTime 
+            });
           }
-        } catch (e) {}
+        } catch (e) {
+          // 오프라인 / 네트워크 지연 시 로컬 기록에서 최근 제출일시 보강
+          try {
+            const history = JSON.parse(localStorage.getItem('english_canvas_exam_history') || '[]');
+            if (history.length > 0) {
+              setStudentStats(prev => ({ ...prev, lastSubmittedAt: prev.lastSubmittedAt || history[0].timestamp || '' }));
+            }
+          } catch(err){}
+        }
       };
 
       const fetchDashboardData = async () => {
@@ -2234,15 +2259,15 @@ ${detailedStats}
 ${feedbackList.slice(-3).join('\n')}
 
 [작성 지침 - 엄격 준수]
-1. 분량: 한글 공백 포함 450~500자 (NEIS 약 1,300~1,450 바이트 규격, 1,500바이트 이하 준수).
+1. 분량: 한글 공백 포함 80~100자 내외 (NEIS 250~300 바이트 규격 엄격 준수, 300바이트 초과 절대 금지).
 2. 어조: '~함', '~임', '~을 보임', '~역량을 드러냄' 등 공식 관찰자 시점 종결형 어미 사용.
-3. 내용: 단순 점수 나열 금지. 영국/미국식 발음 차이 극복 노력, 딕테이션 어휘 인출 정확도, 쉐도잉 훈련을 통한 발음/연음 교정 노력, 자기주도적 오답 분석 과정을 구체적으로 서술.
-4. 마크다운 없이 순수 줄글로 작성.`;
+3. 내용: 단순 점수 나열 금지. 영국/미국식 발음 차이 극복 노력, 딕테이션 어휘 인출 정확도, 쉐도잉 훈련을 통한 발음/연음 교정 노력, 자기주도적 오답 분석 중 1~2개 핵심 역량만 압축 서술.
+4. 마크다운 기호 없이 순수 1~2문장의 줄글로 작성.`;
 
           let resultText = "";
           try {
             const llmRes = await callUnifiedLlm({
-              systemPrompt: "You are a professional Korean high school English teacher who writes excellent NEIS student records according to the 2022 revised curriculum.",
+              systemPrompt: "You are a professional Korean high school English teacher who writes concise, impactful NEIS student records within 250-300 bytes.",
               userPrompt: prompt
             });
 
@@ -2254,16 +2279,14 @@ ${feedbackList.slice(-3).join('\n')}
           }
 
           if (!resultText) {
-            // API 미설정 시 교육과정 성취기준 연계 고품질 정밀 템플릿 산출
-            const listeningStrength = accuracy >= 80 
-              ? `수능형 고급 담화와 다양한 영어권 엑센트(영국식/미국식)의 연음 및 탈락 현상을 정확히 포착하는 뛰어난 청취 변별력을 발휘함.`
-              : `영국식 억양과 구어체 연음 법칙에 대한 집중 청취 훈련을 지속하며 청취 취약점을 주도적으로 개선해 나가는 발전적 태도를 보임.`;
-
-            resultText = `교내 정기 초개인화 영어 듣기평가 프로그램에 성실히 참여하여 총 ${totalCount}회의 실전 모의평가를 완수함. ${listeningStrength} 특히 딕테이션(Dictation) 영역에서 단순 음성 수용에 머무르지 않고, 대화의 맥락과 담화 상황을 종합적으로 고려하여 핵심 어휘를 정확한 철자로 인출하는 탁월한 어휘력을 입증함. 오답 발생 시 원어민 대본을 정밀 분석하고 음성 쉐도잉(Shadowing) 훈련을 병행하여 자신의 발음과 억양을 능동적으로 교정하는 메타인지적 학습 역량이 돋보이며, 수능 및 평가원 빈출 담화 유형에 대한 논리적 추론 및 세부 정보 파악 능력이 꾸준히 성장함.`;
+            // API 미설정 시 교육과정 성취기준 연계 250~300바이트 정밀 템플릿 산출 (공백 포함 약 85~95자)
+            resultText = accuracy >= 80 
+              ? `교내 정기 초개인화 듣기평가에서 영국·미국식 연음 변별력과 문맥 추론 능력을 발휘함. 딕테이션 빈칸 어휘 인출이 정확하며 쉐도잉 훈련을 통해 실전 청취 감각을 체계적으로 다짐.`
+              : `교내 맞춤형 듣기평가에 주도적으로 참여하여 취약 엑센트와 연음 현상을 집중 학습함. 딕테이션 오답 분석과 쉐도잉 반복 훈련을 꾸준히 병행하며 청취 이해도를 꾸준히 향상시킴.`;
           }
 
           setSeTeukResult(prev => ({ ...prev, [studentKey]: resultText }));
-          showToast(`${studentName} 학생의 NEIS 세특 초안이 생성되었습니다!`, "success");
+          showToast(`${studentName} 학생의 NEIS 세특 초안(250~300B)이 생성되었습니다!`, "success");
         } catch (e) {
           console.error(e);
           showToast("세특 생성 중 오류가 발생했습니다.", "error");
@@ -3244,6 +3267,14 @@ ${feedbackList.slice(-3).join('\n')}
                         <span className="text-base font-black text-teal-600 font-mono">{studentStats.correctQuestions}문항</span>
                       </div>
                     </div>
+
+                    {studentStats.lastSubmittedAt && (
+                      <div className="mt-2.5 px-3 py-1.5 bg-slate-100 rounded-lg border border-slate-200 text-center">
+                        <span className="text-[10px] font-mono font-bold text-slate-600">
+                          🕒 최근 제출 일시: {studentStats.lastSubmittedAt}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* 레이더 차트 패널 */}
@@ -3645,9 +3676,16 @@ ${feedbackList.slice(-3).join('\n')}
                   <div className="flex flex-wrap justify-between items-center gap-3 border-b border-slate-300 pb-3">
                     <div className="flex items-center gap-2">
                       <span className="skeuo-led led-green-on"></span>
-                      <h2 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
-                        EVALUATION REPORT (최종 평가 성적표)
-                      </h2>
+                      <div>
+                        <h2 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
+                          EVALUATION REPORT (최종 평가 성적표)
+                        </h2>
+                        {scoreInfo?.submittedAt && (
+                          <span className="text-[11px] font-mono font-bold text-slate-500 block">
+                            📅 제출 일시: {scoreInfo.submittedAt}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <button 
@@ -4065,27 +4103,41 @@ ${feedbackList.slice(-3).join('\n')}
 
               // 통계 연산
               const totalSubmissions = filteredList.length;
-              let sumScore = 0;
-              let q1Correct = 0, q2Correct = 0, q3Correct = 0;
               const uniqueStudents = new Set();
+              const gradeCounts = { 1: 0, 2: 0, 3: 0, other: 0 };
+              const studentSubmissionMap = {}; // key -> { count, name, grade, classNum, studentNum }
 
               filteredList.forEach(r => {
-                const score = parseInt(r['totalScore'] || r['점수'] || 0, 10);
-                sumScore += isNaN(score) ? 0 : score;
-                if ((r['Q1'] || r['q1Result']) === 'O') q1Correct++;
-                if ((r['Q2'] || r['q2Result']) === 'O') q2Correct++;
-                if ((r['Q3'] || r['q3Result']) === 'O') q3Correct++;
-                const sName = r['이름'] || r['name'] || '';
-                const sGrade = r['학년'] || r['schoolGrade'] || '';
-                const sClass = r['반'] || r['classNum'] || '';
-                const sNum = r['번호'] || r['studentNum'] || '';
-                uniqueStudents.add(`${sGrade}-${sClass}-${sNum}-${sName}`);
+                const sName = r['이름'] || r['name'] || '학생';
+                const sGrade = String(r['학년'] || r['schoolGrade'] || '');
+                const sClass = String(r['반'] || r['classNum'] || '');
+                const sNum = String(r['번호'] || r['studentNum'] || '');
+                const sKey = `${sGrade}-${sClass}-${sNum}-${sName}`;
+                uniqueStudents.add(sKey);
+
+                // 학년별 응시 횟수 집계
+                if (sGrade === '1') gradeCounts[1]++;
+                else if (sGrade === '2') gradeCounts[2]++;
+                else if (sGrade === '3') gradeCounts[3]++;
+                else gradeCounts.other++;
+
+                // 학생별 도전 횟수 집계
+                if (!studentSubmissionMap[sKey]) {
+                  studentSubmissionMap[sKey] = {
+                    count: 0,
+                    name: sName,
+                    grade: sGrade,
+                    classNum: sClass,
+                    studentNum: sNum
+                  };
+                }
+                studentSubmissionMap[sKey].count++;
               });
 
-              const avgScore = totalSubmissions > 0 ? (sumScore / totalSubmissions).toFixed(1) : 0;
-              const q1Rate = totalSubmissions > 0 ? Math.round((q1Correct / totalSubmissions) * 100) : 0;
-              const q2Rate = totalSubmissions > 0 ? Math.round((q2Correct / totalSubmissions) * 100) : 0;
-              const q3Rate = totalSubmissions > 0 ? Math.round((q3Correct / totalSubmissions) * 100) : 0;
+              // 가장 많이 도전한 열정 학생 Top 3 랭킹
+              const topChallengers = Object.values(studentSubmissionMap)
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 3);
 
               return (
                 <div className="space-y-6 animate-fade-in max-w-5xl mx-auto pb-12">
@@ -4098,7 +4150,7 @@ ${feedbackList.slice(-3).join('\n')}
                         <h2 className="text-base sm:text-lg font-black text-slate-800">학급 듣기평가 관리 및 NEIS 세특 센터</h2>
                       </div>
                       <p className="text-xs font-medium text-slate-500 mt-1">
-                        실시간 응시 현황 분석, 엑셀 성적표 추출 및 나이스(NEIS) 과세특 1,500Byte 정밀 자동 생성
+                        실시간 응시 현황 분석, 엑셀 성적표 추출 및 나이스(NEIS) 과세특 250~300Byte 정밀 자동 생성
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -4125,31 +4177,53 @@ ${feedbackList.slice(-3).join('\n')}
                     </div>
                   </div>
 
-                  {/* 계기판 통계 카드 그리드 */}
+                  {/* 계기판 통계 카드 그리드 (개편: 총 응시, 학년별 분포, 도전왕 랭킹, NEIS 세특) */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="skeuo-deck p-4 text-center space-y-1">
                       <span className="text-[11px] font-bold text-slate-500 block">총 응시 건수</span>
                       <span className="text-2xl font-black text-slate-800 font-mono">{totalSubmissions}건</span>
                       <span className="text-[10px] text-slate-400 block font-medium">({uniqueStudents.size}명 고유 참여)</span>
                     </div>
+
+                    {/* 학년별 응시 횟수 현황 카드 */}
                     <div className="skeuo-deck p-4 text-center space-y-1">
-                      <span className="text-[11px] font-bold text-slate-500 block">학급 평균 점수</span>
-                      <span className="text-2xl font-black text-teal-700 font-mono">{avgScore}점</span>
-                      <span className="text-[10px] text-slate-400 block font-medium">/ 90점 만점 기준</span>
-                    </div>
-                    <div className="skeuo-deck p-4 text-center space-y-1">
-                      <span className="text-[11px] font-bold text-slate-500 block">문항별 정답률</span>
-                      <div className="flex justify-around text-xs font-bold font-mono text-slate-700 pt-1">
-                        <span title="1번 문항" className={q1Rate < 60 ? 'text-rose-600' : 'text-slate-800'}>Q1: {q1Rate}%</span>
-                        <span title="2번 문항" className={q2Rate < 60 ? 'text-rose-600' : 'text-slate-800'}>Q2: {q2Rate}%</span>
-                        <span title="3번 문항" className={q3Rate < 60 ? 'text-rose-600' : 'text-slate-800'}>Q3: {q3Rate}%</span>
+                      <span className="text-[11px] font-bold text-slate-500 block">학년별 응시 횟수</span>
+                      <div className="flex justify-around items-center pt-1 text-xs font-bold font-mono">
+                        <span className="text-blue-700">1학년: {gradeCounts[1]}</span>
+                        <span className="text-amber-700">2학년: {gradeCounts[2]}</span>
+                        <span className="text-purple-700">3학년: {gradeCounts[3]}</span>
                       </div>
-                      <span className="text-[10px] text-slate-400 block font-medium">취약 문항 실시간 파악</span>
+                      <span className="text-[10px] text-slate-400 block font-medium">학년별 참여 분포</span>
                     </div>
+
+                    {/* 가장 많이 도전한 열정 학생 Top 3 랭킹 카드 */}
+                    <div className="skeuo-deck p-3.5 text-center flex flex-col justify-between">
+                      <span className="text-[11px] font-bold text-slate-600 block mb-1">
+                        🏆 최다 도전 랭킹 Top 3
+                      </span>
+                      {topChallengers.length === 0 ? (
+                        <span className="text-[11px] text-slate-400 py-2">응시 기록 없음</span>
+                      ) : (
+                        <div className="space-y-1 text-left px-1">
+                          {topChallengers.map((ch, idx) => (
+                            <div key={idx} className="flex justify-between items-center text-[11px]">
+                              <span className="font-bold text-slate-700 truncate max-w-[120px]">
+                                <span className={idx === 0 ? 'text-amber-500 font-black' : idx === 1 ? 'text-slate-400 font-black' : 'text-amber-700 font-black'}>
+                                  {idx + 1}위
+                                </span> {ch.name} <span className="text-[10px] text-slate-400">({ch.grade}년)</span>
+                              </span>
+                              <span className="font-mono font-bold text-teal-700">{ch.count}회</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* NEIS 과세특 연계 카드 */}
                     <div className="skeuo-deck p-4 text-center flex flex-col justify-center bg-teal-50/50">
                       <span className="text-[11px] font-bold text-teal-900 block mb-1">NEIS 과세특 연계</span>
                       <span className="text-xs font-bold bg-teal-700 text-white px-2 py-1 rounded shadow-xs inline-block">
-                        1500B 정밀 자동 초안
+                        250~300B 정밀 자동 초안
                       </span>
                     </div>
                   </div>
@@ -4270,8 +4344,29 @@ ${feedbackList.slice(-3).join('\n')}
                                   <td className="p-2.5 border-r border-slate-200 text-center font-bold">
                                     {(row['Q3'] || row['q3Result']) === 'O' ? <span className="text-emerald-600">O</span> : <span className="text-rose-500">X</span>}
                                   </td>
-                                  <td className="p-2.5 border-r border-slate-200 max-w-xs truncate text-slate-600" title={row['AI피드백'] || row['aiFeedback']}>
-                                    {row['AI피드백'] || row['aiFeedback'] || '-'}
+                                  <td className="p-2.5 border-r border-slate-200 text-slate-600 max-w-[220px]">
+                                    <div className="flex items-center justify-between gap-1.5">
+                                      <span className="truncate text-[11px]" title={row['AI피드백'] || row['aiFeedback']}>
+                                        {row['AI피드백'] || row['aiFeedback'] || '-'}
+                                      </span>
+                                      {(row['AI피드백'] || row['aiFeedback']) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setSelectedFeedbackModal({
+                                            studentName,
+                                            studentKey,
+                                            timestamp: row['timestamp'] || row['제출시간'] || '방금 전',
+                                            feedback: row['AI피드백'] || row['aiFeedback'],
+                                            score: row['totalScore'] || row['점수'] || 0,
+                                            maxScore: row['maxScore'] || row['만점'] || 90
+                                          })}
+                                          className="shrink-0 text-[10px] font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 px-1.5 py-0.5 rounded border border-teal-200 transition-colors"
+                                          title="AI 피드백 전문 열람"
+                                        >
+                                          🔍 전문
+                                        </button>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="p-2.5 text-center whitespace-nowrap">
                                     <button 
@@ -4300,8 +4395,8 @@ ${feedbackList.slice(-3).join('\n')}
                   {activeSeTeukStudent && (() => {
                     const currentSeTeuk = seTeukResult[activeSeTeukStudent] || '';
                     const byteStats = calculateNeisBytes(currentSeTeuk);
-                    const isOverLimit = byteStats.totalBytes > 1500;
-                    const bytePercent = Math.min(100, Math.round((byteStats.totalBytes / 1500) * 100));
+                    const isOverLimit = byteStats.bytes > 300;
+                    const bytePercent = Math.min(100, Math.round((byteStats.bytes / 300) * 100));
 
                     return (
                       <div className="skeuo-deck p-5 space-y-4 animate-fade-in border-2 border-teal-500">
@@ -4312,7 +4407,7 @@ ${feedbackList.slice(-3).join('\n')}
                               <h4 className="font-black text-sm text-slate-800">
                                 [{activeSeTeukStudent}] NEIS 과목별 세부능력 및 특기사항(세특) 초안
                               </h4>
-                              <span className="text-[11px] text-slate-500">2022 개정 교육과정 영어과 성취기준 및 개인별 취약점 보완 이력 반영</span>
+                              <span className="text-[11px] text-slate-500">2022 개정 교육과정 영어과 성취기준 반영 (250~300B 나이스 권장 규격)</span>
                             </div>
                           </div>
                           <button 
@@ -4327,7 +4422,7 @@ ${feedbackList.slice(-3).join('\n')}
                           <div className="skeuo-inset p-8 text-center space-y-2">
                             <div className="animate-spin text-2xl">⏳</div>
                             <p className="text-xs font-bold text-slate-700">
-                              학생의 누적 오답 패턴과 연음/직청직해 발달 과정을 분석하여 NEIS 규격 맞춤 문구를 생성하고 있습니다...
+                              학생의 누적 오답 패턴과 연음/직청직해 발달 과정을 분석하여 250~300B NEIS 맞춤 문구를 생성하고 있습니다...
                             </p>
                           </div>
                         ) : (
@@ -4337,25 +4432,25 @@ ${feedbackList.slice(-3).join('\n')}
                               {currentSeTeuk || "세특 문구를 생성하지 못했습니다."}
                             </div>
 
-                            {/* [신규 고도화] NEIS 1,500 Byte 정밀 계측기 패널 */}
+                            {/* [개편] NEIS 250~300 Byte 정밀 계측기 패널 */}
                             <div className="bg-slate-100 p-3 rounded-xl border border-slate-200 space-y-2">
                               <div className="flex flex-wrap justify-between items-center text-xs">
                                 <div className="flex items-center gap-2">
-                                  <span className={`skeuo-led ${isOverLimit ? 'led-red-on' : byteStats.totalBytes >= 1000 ? 'led-green-on' : 'led-amber-on'}`}></span>
+                                  <span className={`skeuo-led ${isOverLimit ? 'led-red-on' : byteStats.bytes >= 240 ? 'led-green-on' : 'led-amber-on'}`}></span>
                                   <span className="font-bold text-slate-800">
-                                    NEIS 바이트 계측: <strong className={isOverLimit ? 'text-rose-600 font-mono' : 'text-teal-700 font-mono'}>{byteStats.totalBytes}</strong> / 1,500 Bytes
+                                    NEIS 바이트 계측: <strong className={isOverLimit ? 'text-rose-600 font-mono' : 'text-teal-700 font-mono'}>{byteStats.bytes}</strong> / 300 Bytes
                                   </span>
                                   <span className="text-slate-400 font-medium">({currentSeTeuk.length}자)</span>
                                 </div>
                                 <span className={`text-[11px] font-bold ${isOverLimit ? 'text-rose-600' : 'text-slate-500'}`}>
-                                  {isOverLimit ? '⚠️ 1500B 초과 (나이스 입력 시 잘림)' : '✅ 나이스 1,500B 입력 규격 충족'}
+                                  {isOverLimit ? '⚠️ 300B 초과 (축소 권장)' : '✅ 나이스 250~300B 규격 충족'}
                                 </span>
                               </div>
 
                               {/* 바이트 프로그레스 바 */}
                               <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
                                 <div 
-                                  className={`h-full transition-all duration-300 ${isOverLimit ? 'bg-rose-500' : bytePercent >= 70 ? 'bg-emerald-500' : 'bg-amber-400'}`} 
+                                  className={`h-full transition-all duration-300 ${isOverLimit ? 'bg-rose-500' : bytePercent >= 80 ? 'bg-emerald-500' : 'bg-amber-400'}`} 
                                   style={{ width: `${bytePercent}%` }}
                                 ></div>
                               </div>
@@ -4396,6 +4491,59 @@ ${feedbackList.slice(-3).join('\n')}
                       </div>
                     );
                   })()}
+
+                  {/* 교사용 학생 AI 피드백 전체 열람 팝업 모달 */}
+                  {selectedFeedbackModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+                      <div className="skeuo-deck max-w-lg w-full p-6 space-y-4 max-h-[85vh] flex flex-col border-2 border-teal-500 shadow-2xl">
+                        <div className="flex justify-between items-start border-b border-slate-300 pb-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xl">💬</span>
+                              <h3 className="font-black text-base text-slate-800">
+                                [{selectedFeedbackModal.studentName}] 실시간 피드백 전문
+                              </h3>
+                            </div>
+                            <div className="flex items-center gap-3 mt-1 text-xs text-slate-500 font-mono">
+                              <span>📅 제출일시: {selectedFeedbackModal.timestamp}</span>
+                              <span className="text-teal-700 font-bold">점수: {selectedFeedbackModal.score}/{selectedFeedbackModal.maxScore}점</span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFeedbackModal(null)}
+                            className="skeuo-btn px-2.5 py-1 text-xs font-bold text-slate-600 hover:text-slate-900"
+                          >
+                            닫기 ✕
+                          </button>
+                        </div>
+
+                        <div className="skeuo-inset p-4 bg-white/90 overflow-y-auto max-h-[50vh] text-slate-800 text-sm leading-relaxed whitespace-pre-wrap select-text">
+                          {selectedFeedbackModal.feedback}
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(selectedFeedbackModal.feedback);
+                              showToast("피드백 전문이 복사되었습니다!", "success");
+                            }}
+                            className="skeuo-btn skeuo-btn-teal px-4 py-2 text-xs font-bold text-white"
+                          >
+                            📋 피드백 복사
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFeedbackModal(null)}
+                            className="skeuo-btn px-4 py-2 text-xs font-bold text-slate-700"
+                          >
+                            확인
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                 </div>
               );
