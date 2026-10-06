@@ -1,0 +1,167 @@
+@import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
+@import "tailwindcss";
+
+body {
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+  background: linear-gradient(135deg, #e8edf3 0%, #d8e0e9 50%, #cfd8e3 100%);
+  min-height: 100vh;
+}
+
+/* === 모던 스큐어모피즘 (Skeuomorphism) 디자인 토큰 === */
+/* 1. 어학기 본체 섀시 (Hardware Deck) */
+.skeuo-deck {
+  background: linear-gradient(180deg, #fcfdfe 0%, #f4f6f8 100%);
+  border: 1px solid #cfd6df;
+  border-bottom: 2px solid #b4bcc8;
+  border-radius: 18px;
+  box-shadow: 
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.04),
+    0 12px 30px -4px rgba(27, 38, 59, 0.12),
+    0 4px 10px rgba(0, 0, 0, 0.04);
+}
+
+/* 2. 음각 패널 (Recessed Panel) */
+.skeuo-inset {
+  background: linear-gradient(180deg, #e9eef3 0%, #f5f7fa 100%);
+  border: 1px solid #c7d0db;
+  border-radius: 12px;
+  box-shadow: 
+    inset 0 2px 4px rgba(0, 0, 0, 0.08),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.8),
+    0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* 3. 에메랄드 백라이트 LCD 디스플레이 */
+.skeuo-lcd {
+  background: radial-gradient(ellipse at 50% 40%, #173327 0%, #0d1e16 100%);
+  color: #00ff9d;
+  border: 2px solid #234737;
+  border-radius: 10px;
+  box-shadow: 
+    inset 0 3px 8px rgba(0, 0, 0, 0.75),
+    inset 0 -1px 2px rgba(0, 255, 157, 0.15),
+    0 1px 0 rgba(255, 255, 255, 0.4);
+  font-family: 'JetBrains Mono', monospace;
+  text-shadow: 0 0 7px rgba(0, 255, 157, 0.55);
+}
+
+/* 4. 물리적 햅틱 버튼 (Tactile Hardware Push Button) */
+.skeuo-btn {
+  background: linear-gradient(180deg, #ffffff 0%, #eaedf1 100%);
+  border: 1px solid #bcc4ce;
+  border-bottom: 2px solid #9aa4b2;
+  border-radius: 10px;
+  box-shadow: 
+    0 3px 5px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition: all 0.08s ease;
+  cursor: pointer;
+  user-select: none;
+}
+.skeuo-btn:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #f0f3f6 100%);
+  border-color: #adb6c2;
+}
+.skeuo-btn:active {
+  transform: translateY(1.5px);
+  border-bottom: 1px solid #bcc4ce;
+  background: linear-gradient(180deg, #e4e8ee 0%, #edf0f4 100%);
+  box-shadow: 
+    inset 0 2px 5px rgba(0, 0, 0, 0.16),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* 색상별 햅틱 버튼 */
+.skeuo-btn-teal {
+  background: linear-gradient(180deg, #2dd4bf 0%, #0d9488 100%);
+  border: 1px solid #0f766e;
+  border-bottom: 2px solid #115e59;
+  color: #ffffff;
+  box-shadow: 0 3px 6px rgba(13, 148, 136, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+.skeuo-btn-teal:active {
+  background: linear-gradient(180deg, #0f766e 0%, #115e59 100%);
+  transform: translateY(1.5px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
+}
+
+.skeuo-btn-amber {
+  background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+  border: 1px solid #b45309;
+  border-bottom: 2px solid #92400e;
+  color: #ffffff;
+  box-shadow: 0 3px 6px rgba(217, 119, 6, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+.skeuo-btn-amber:active {
+  background: linear-gradient(180deg, #b45309 0%, #92400e 100%);
+  transform: translateY(1.5px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
+}
+
+.skeuo-btn-red {
+  background: linear-gradient(180deg, #f87171 0%, #dc2626 100%);
+  border: 1px solid #b91c1c;
+  border-bottom: 2px solid #991b1b;
+  color: #ffffff;
+  box-shadow: 0 3px 6px rgba(220, 38, 38, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+.skeuo-btn-red:active {
+  background: linear-gradient(180deg, #b91c1c 0%, #991b1b 100%);
+  transform: translateY(1.5px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* 5. LED 인디케이터 램프 */
+.skeuo-led {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.2);
+  display: inline-block;
+  transition: all 0.2s ease;
+}
+.led-green-on {
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981, inset 0 1px 1px rgba(255,255,255,0.9);
+}
+.led-green-off {
+  background: #1f4738;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+}
+.led-amber-on {
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b, inset 0 1px 1px rgba(255,255,255,0.9);
+}
+.led-red-on {
+  background: #ef4444;
+  box-shadow: 0 0 8px #ef4444, inset 0 1px 1px rgba(255,255,255,0.9);
+}
+
+/* 6. 수능 OMR 카드 컴퓨터용 사인펜 마킹 효과 */
+.skeuo-omr-bubble {
+  width: 30px; height: 20px;
+  border-radius: 10px;
+  border: 1.5px solid #6b7280;
+  background: #ffffff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; color: #4b5563;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.1), 0 1px 0 rgba(255,255,255,0.8);
+  transition: all 0.15s ease;
+}
+.skeuo-omr-bubble.marked {
+  background: radial-gradient(circle at 40% 40%, #2b2b2b 0%, #0a0a0a 100%);
+  color: #ffffff;
+  border-color: #000000;
+  box-shadow: 
+    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+    0 0 5px rgba(0, 0, 0, 0.4);
+  transform: scale(1.04);
+}
+
+/* 인쇄 모드 최적화 (Clean Print Layout) */
+@media print {
+  body { background: #ffffff !important; }
+  header, .no-print, button:not(.print-allow) { display: none !important; }
+  .skeuo-deck, .skeuo-inset { box-shadow: none !important; border: 1px solid #999 !important; background: #ffffff !important; }
+  .skeuo-lcd { background: #ffffff !important; color: #000000 !important; text-shadow: none !important; border: 1px solid #000 !important; }
+  .print-page { break-inside: avoid; page-break-after: auto; }
+}
