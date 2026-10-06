@@ -98,6 +98,7 @@ import { RadarChartWidget } from './components/RadarChartWidget';
       const [playingStage, setPlayingStage] = useState(null); // null | 'narration' | 'chime' | 'body'
       const [examBankTab, setExamBankTab] = useState('preset'); // 'preset' | 'ai' | 'theme'
       const sequenceCancelledRef = useRef(false);
+      const activeSessionIdRef = useRef(0); // 발화 세션 고유 ID (새 발화 시 이전 발화 100% 즉시 차단)
       const [isPaused, setIsPaused] = useState(false);
       const [playbackRate, setPlaybackRate] = useState(1.0);
       const synthRef = useRef(window.speechSynthesis);
@@ -1112,8 +1113,14 @@ import { RadarChartWidget } from './components/RadarChartWidget';
           }
         }
 
+        // 이전 발화 강제 중단 및 신규 발화 세션 번호 발급 (기존 오디오/루프 즉시 파기)
         stopSpeech();
+        const currentSessionId = Date.now();
+        activeSessionIdRef.current = currentSessionId;
         sequenceCancelledRef.current = false;
+
+        // 세션 유효성 판별 헬퍼 (새 발화 요청 시 true 반환)
+        const isSessionInvalid = () => sequenceCancelledRef.current || activeSessionIdRef.current !== currentSessionId;
 
         // 시험 중이면 재생 횟수 증가
         if (examState === 'taking') {
@@ -1144,24 +1151,26 @@ import { RadarChartWidget } from './components/RadarChartWidget';
           await new Promise((resolve) => {
             const introUtter = new SpeechSynthesisUtterance(introText);
             introUtter.lang = 'ko-KR'; // 한국어 음성 모드
-            // 기계음을 없애고 인간 아나운서의 차분하고 부드러운 낭독 톤 구현
             introUtter.rate = 0.92;     // 살짝 여유 있고 안정적인 방송 낭독 속도 (기계음 방지)
             introUtter.pitch = 1.02;    // 또렷하고 생동감 있는 자연스러운 음조
             if (korVoice) introUtter.voice = korVoice;
             introUtter.onend = resolve;
             introUtter.onerror = (e) => {
-              console.warn("한국어 음성 안내 재생 오류, 다음 단계로 진행:", e);
+              if (e.error !== 'canceled' && e.error !== 'interrupted') {
+                console.warn("한국어 음성 안내 재생 오류:", e);
+              }
               resolve();
             };
+            utterancesRef.current.push(introUtter);
             synthRef.current.speak(introUtter);
           });
 
-          if (sequenceCancelledRef.current) return;
+          if (isSessionInvalid()) return;
 
           // 2단계: 수능 딩동댕 시그널 차임벨 합성 재생
           setPlayingStage('chime');
           await playChimeAudio();
-          if (sequenceCancelledRef.current) return;
+          if (isSessionInvalid()) return;
         }
 
         // 3단계: 원어민 본문 대화/담화 재생 (남-녀 2인 대화 엄격 구분 & Google AI Studio 무료 API 실시간 재생)
@@ -1190,9 +1199,6 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         // 100% 남/녀 음성 분리 보장 (Zero-Collision 매핑 & 화자별 맞춤 피치/속도 프로필)
         const { maleVoice, femaleVoice, maleSettings, femaleSettings, isSameVoice } = resolveDisjointVoices(voices, activeMaleVoiceName, activeFemaleVoiceName, item.accent);
 
-        const maleProfile = VOICE_REGIONAL_PROFILES[activeMaleVoiceName] || VOICE_REGIONAL_PROFILES.Puck;
-        const femaleProfile = VOICE_REGIONAL_PROFILES[activeFemaleVoiceName] || VOICE_REGIONAL_PROFILES.Aoede;
-
         // 1. 대본 정제 및 발화자/대사 리스트 구조화 (상황묘사/지문/효과음 지시문 완전 제거 & 남녀 1:1 교차 대화 보장)
         const isMonologue = item.type === 'monologue';
         const parsedTurns = parseDialogueTurns(item.transcript, isMonologue);
@@ -1212,16 +1218,15 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         });
 
         // 2. 전체 대화 오디오 백그라운드 프리페치 (Lookahead Pre-fetching)
-        // 첫 문장 시작 전 전체 대사의 TTS를 병렬로 미리 요청/캐싱하여 대화 간 버퍼링 지연을 0초로 단축
         if (customApiKey && parsedDialogueList.length > 0) {
           parsedDialogueList.forEach(turn => {
             fetchGoogleAiNativeAudio(turn.speechText, turn.targetAiVoiceName).catch(() => {});
           });
         }
 
-        // 3. 실제 순차 재생 실행 (포즈 없는 자연스러운 연속 대화)
+        // 3. 실제 순차 재생 실행 (포즈 없는 자연스러운 연속 대화 & 겹침 원천 차단)
         for (let idx = 0; idx < parsedDialogueList.length; idx++) {
-          if (sequenceCancelledRef.current) break;
+          if (isSessionInvalid()) break;
           const turn = parsedDialogueList[idx];
 
           // 다음 문장 오디오 사전 로드 확인
@@ -1233,7 +1238,7 @@ import { RadarChartWidget } from './components/RadarChartWidget';
           let playedViaGoogleAi = false;
           if (customApiKey) {
             const audioUrl = await fetchGoogleAiNativeAudio(turn.speechText, turn.targetAiVoiceName);
-            if (audioUrl && !sequenceCancelledRef.current) {
+            if (audioUrl && !isSessionInvalid()) {
               const profile = VOICE_REGIONAL_PROFILES[turn.targetAiVoiceName] || {};
               setActiveSpeakerIndicator({ 
                 role: turn.isMale ? 'M' : 'W', 
@@ -1245,11 +1250,11 @@ import { RadarChartWidget } from './components/RadarChartWidget';
                 currentAudioRef.current = audio;
                 audio.playbackRate = playbackRate;
                 audio.onended = () => {
-                  currentAudioRef.current = null;
+                  if (currentAudioRef.current === audio) currentAudioRef.current = null;
                   resolve();
                 };
                 audio.onerror = () => {
-                  currentAudioRef.current = null;
+                  if (currentAudioRef.current === audio) currentAudioRef.current = null;
                   resolve();
                 };
                 audio.play().catch(() => resolve());
@@ -1258,7 +1263,7 @@ import { RadarChartWidget } from './components/RadarChartWidget';
             }
           }
 
-          if (sequenceCancelledRef.current) break;
+          if (isSessionInvalid()) break;
 
           // 2순위: 폴백 브라우저 Web Speech (선택한 화자 ID별 고유 음성 객체, 액센트 및 피치/속도 프로필 100% 반영)
           if (!playedViaGoogleAi) {
@@ -1307,13 +1312,13 @@ import { RadarChartWidget } from './components/RadarChartWidget';
 
           setActiveSpeakerIndicator(null);
 
-          // 대사 간 인위적인 지연(포즈) 없이 즉시 다음 대사로 부드럽게 연결 (무지연 연속 재생)
-          if (idx < parsedDialogueList.length - 1 && !sequenceCancelledRef.current) {
+          // 대사 간 인위적인 지연(포즈) 없이 즉시 다음 대사로 부드럽게 연결
+          if (idx < parsedDialogueList.length - 1 && !isSessionInvalid()) {
             await new Promise(r => setTimeout(r, 10));
           }
         }
 
-        if (!sequenceCancelledRef.current) {
+        if (!isSessionInvalid()) {
           setPlayingId(null); 
           setIsPaused(false); 
           setPlayingStage(null);
@@ -1324,18 +1329,25 @@ import { RadarChartWidget } from './components/RadarChartWidget';
 
       const stopSpeech = () => {
         sequenceCancelledRef.current = true;
+        activeSessionIdRef.current = Date.now(); // 기존 모든 비동기 발화 세션 무효화
         setIsContinuousPlaying(false);
         if (currentAudioRef.current) {
           try {
             currentAudioRef.current.pause();
             currentAudioRef.current.currentTime = 0;
+            currentAudioRef.current.src = "";
           } catch(e) {}
           currentAudioRef.current = null;
         }
-        if (synthRef.current) synthRef.current.cancel();
+        if (synthRef.current) {
+          try {
+            synthRef.current.cancel();
+          } catch(e) {}
+        }
         setPlayingId(null); 
         setIsPaused(false); 
         setPlayingStage(null);
+        setActiveSpeakerIndicator(null);
         utterancesRef.current = [];
       };
 
@@ -1363,6 +1375,9 @@ import { RadarChartWidget } from './components/RadarChartWidget';
       // [신규 고도화] 딕테이션 빈칸 타겟 문장 3초 핀포인트 구간반복 (A-B Repeat)
       const playSaTargetSnippet = async (item) => {
         stopSpeech();
+        const currentSessionId = Date.now();
+        activeSessionIdRef.current = currentSessionId;
+        sequenceCancelledRef.current = false;
         
         const isMonologue = item.type === 'monologue';
         const parsedTurns = parseDialogueTurns(item.transcript, isMonologue);
@@ -1384,17 +1399,23 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         const targetVoice = isMale ? aiMaleVoice : aiFemaleVoice;
         if (customApiKey) {
           const audioUrl = await fetchGoogleAiNativeAudio(targetLine, targetVoice);
-          if (audioUrl) {
+          if (audioUrl && activeSessionIdRef.current === currentSessionId) {
             const audio = new Audio(audioUrl);
             currentAudioRef.current = audio;
             audio.playbackRate = playbackRate;
+            audio.onended = () => {
+              if (currentAudioRef.current === audio) currentAudioRef.current = null;
+            };
+            audio.onerror = () => {
+              if (currentAudioRef.current === audio) currentAudioRef.current = null;
+            };
             audio.play().catch(() => {});
             return;
           }
         }
 
         // 2순위: 폴백 브라우저 Web Speech (남-녀 음성 완전 분리)
-        if (!synthRef.current) return;
+        if (!synthRef.current || activeSessionIdRef.current !== currentSessionId) return;
         let voices = synthRef.current.getVoices();
         if (voices.length === 0) voices = window.speechSynthesis.getVoices();
         const { maleVoice, femaleVoice, isSameVoice } = resolveDisjointVoices(voices, aiMaleVoice, aiFemaleVoice, item.accent);
@@ -1406,7 +1427,7 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         const textToSpeak = (targetProfile.country === '인도' && !isNativeIndianVoice) ? adaptTextForIndianAccent(targetLine) : targetLine;
 
         const utter = new SpeechSynthesisUtterance(textToSpeak);
-        utter.lang = targetProfile.langCode || langCode;
+        utter.lang = targetProfile.langCode || (item.accent === 'uk' ? 'en-GB' : 'en-US');
         if (isMale) {
           if (maleVoice) utter.voice = maleVoice;
           utter.pitch = Math.min(maleProfile.pitch || 0.80, 0.72);
@@ -1417,6 +1438,7 @@ import { RadarChartWidget } from './components/RadarChartWidget';
           utter.rate = playbackRate * (isSameVoice ? 1.15 : (femaleProfile.rate || 1.04));
         }
 
+        utterancesRef.current.push(utter);
         synthRef.current.speak(utter);
       };
 
@@ -1484,6 +1506,9 @@ import { RadarChartWidget } from './components/RadarChartWidget';
 
       const playRPAudio = async (text, accent, speakerRole) => {
         stopSpeech();
+        const currentSessionId = Date.now();
+        activeSessionIdRef.current = currentSessionId;
+        sequenceCancelledRef.current = false;
 
         const isFemale = speakerRole === 'W';
         const targetAiVoice = isFemale ? aiFemaleVoice : aiMaleVoice;
@@ -1491,28 +1516,33 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         // 1순위: Google AI Studio 무료 API 실시간 원어민 음성 재생
         if (customApiKey) {
           const audioUrl = await fetchGoogleAiNativeAudio(text, targetAiVoice);
-          if (audioUrl) {
+          if (audioUrl && activeSessionIdRef.current === currentSessionId) {
             const audio = new Audio(audioUrl);
             currentAudioRef.current = audio;
             audio.playbackRate = playbackRate;
             audio.onended = () => {
-              currentAudioRef.current = null;
-              setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+              if (currentAudioRef.current === audio) currentAudioRef.current = null;
+              if (activeSessionIdRef.current === currentSessionId) {
+                setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+              }
             };
             audio.onerror = () => {
-              currentAudioRef.current = null;
-              setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+              if (currentAudioRef.current === audio) currentAudioRef.current = null;
+              if (activeSessionIdRef.current === currentSessionId) {
+                setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+              }
             };
             audio.play().catch(() => {
-              setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+              if (activeSessionIdRef.current === currentSessionId) {
+                setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+              }
             });
             return;
           }
         }
 
         // 2순위: 폴백 브라우저 Web Speech
-        if (!synthRef.current) {
-          setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+        if (!synthRef.current || activeSessionIdRef.current !== currentSessionId) {
           return;
         }
 
@@ -1542,11 +1572,16 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         }
 
         utter.onend = () => {
-          setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+          if (activeSessionIdRef.current === currentSessionId) {
+            setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+          }
         };
         utter.onerror = (e) => {
-          if (e.error !== 'canceled') setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+          if (e.error !== 'canceled' && e.error !== 'interrupted' && activeSessionIdRef.current === currentSessionId) {
+            setRpState(prev => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+          }
         };
+        utterancesRef.current.push(utter);
         synthRef.current.speak(utter);
       };
 
@@ -2492,18 +2527,25 @@ ${feedbackList.slice(-3).join('\n')}
                             onClick={async (e) => {
                               e.stopPropagation();
                               stopSpeech();
+                              const currentSessionId = Date.now();
+                              activeSessionIdRef.current = currentSessionId;
+                              sequenceCancelledRef.current = false;
+
                               const chosenId = v.id === 'random' ? 'Puck' : v.id;
                               const sampleText = (VOICE_REGIONAL_PROFILES[chosenId] || {}).sample || "Hello! I am speaking in natural native English for your listening exam.";
                               if (customApiKey) {
                                 showToast(`Google AI Studio '${chosenId}' (${(VOICE_REGIONAL_PROFILES[chosenId] || {}).country}) 고음질 음성 생성 중...`, "info");
                                 const audioUrl = await fetchGoogleAiNativeAudio(sampleText, chosenId);
-                                if (audioUrl) {
+                                if (audioUrl && activeSessionIdRef.current === currentSessionId) {
                                   const audio = new Audio(audioUrl);
                                   currentAudioRef.current = audio;
+                                  audio.onended = () => { if (currentAudioRef.current === audio) currentAudioRef.current = null; };
+                                  audio.onerror = () => { if (currentAudioRef.current === audio) currentAudioRef.current = null; };
                                   audio.play().catch(() => {});
                                   return;
                                 }
                               }
+                              if (activeSessionIdRef.current !== currentSessionId) return;
                               let voices = synthRef.current ? synthRef.current.getVoices() : [];
                               const { maleVoice, maleSettings, isSameVoice } = resolveDisjointVoices(voices, chosenId, 'Aoede', 'us');
                               const profile = VOICE_REGIONAL_PROFILES[chosenId] || {};
@@ -2518,6 +2560,7 @@ ${feedbackList.slice(-3).join('\n')}
                               utter.pitch = maleSettings.pitch || 0.88; 
                               utter.rate = maleSettings.rate || 1.0;
                               showToast(`남성 목소리 재생 중: ${profile.flag || ''} ${chosenId} (${profile.accentName || '글로벌 원어민'})`, "info");
+                              utterancesRef.current.push(utter);
                               synthRef.current.speak(utter);
                             }}
                             className="skeuo-btn text-[10px] px-2 py-0.5 font-bold text-teal-800"
@@ -2555,18 +2598,25 @@ ${feedbackList.slice(-3).join('\n')}
                             onClick={async (e) => {
                               e.stopPropagation();
                               stopSpeech();
+                              const currentSessionId = Date.now();
+                              activeSessionIdRef.current = currentSessionId;
+                              sequenceCancelledRef.current = false;
+
                               const chosenId = v.id === 'random' ? 'Aoede' : v.id;
                               const sampleText = (VOICE_REGIONAL_PROFILES[chosenId] || {}).sample || "Hi there! I am ready to practice Global English listening with you.";
                               if (customApiKey) {
                                 showToast(`Google AI Studio '${chosenId}' (${(VOICE_REGIONAL_PROFILES[chosenId] || {}).country}) 고음질 음성 생성 중...`, "info");
                                 const audioUrl = await fetchGoogleAiNativeAudio(sampleText, chosenId);
-                                if (audioUrl) {
+                                if (audioUrl && activeSessionIdRef.current === currentSessionId) {
                                   const audio = new Audio(audioUrl);
                                   currentAudioRef.current = audio;
+                                  audio.onended = () => { if (currentAudioRef.current === audio) currentAudioRef.current = null; };
+                                  audio.onerror = () => { if (currentAudioRef.current === audio) currentAudioRef.current = null; };
                                   audio.play().catch(() => {});
                                   return;
                                 }
                               }
+                              if (activeSessionIdRef.current !== currentSessionId) return;
                               let voices = synthRef.current ? synthRef.current.getVoices() : [];
                               const { femaleVoice, femaleSettings, isSameVoice } = resolveDisjointVoices(voices, 'Puck', chosenId, 'us');
                               const profile = VOICE_REGIONAL_PROFILES[chosenId] || {};
@@ -2581,6 +2631,7 @@ ${feedbackList.slice(-3).join('\n')}
                               utter.pitch = femaleSettings.pitch || 1.15; 
                               utter.rate = femaleSettings.rate || 1.0;
                               showToast(`여성 목소리 재생 중: ${profile.flag || ''} ${chosenId} (${profile.accentName || '글로벌 원어민'})`, "info");
+                              utterancesRef.current.push(utter);
                               synthRef.current.speak(utter);
                             }}
                             className="skeuo-btn text-[10px] px-2 py-0.5 font-bold text-pink-800"
@@ -2605,6 +2656,10 @@ ${feedbackList.slice(-3).join('\n')}
                       type="button"
                       onClick={() => {
                         stopSpeech();
+                        const currentSessionId = Date.now();
+                        activeSessionIdRef.current = currentSessionId;
+                        sequenceCancelledRef.current = false;
+
                         let voices = synthRef.current.getVoices();
                         const korVoice = findKoreanVoice(voices, aiKoreanVoice);
                         const sampleText = "1번, 다음을 듣고, 남자가 하는 말의 목적으로 가장 적절한 것을 고르시오.";
@@ -2613,6 +2668,7 @@ ${feedbackList.slice(-3).join('\n')}
                         utter.rate = 0.92;
                         utter.pitch = 1.02;
                         if (korVoice) utter.voice = korVoice;
+                        utterancesRef.current.push(utter);
                         synthRef.current.speak(utter);
                       }}
                       className="skeuo-btn text-[11px] px-2.5 py-1 font-bold text-slate-700"
