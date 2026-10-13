@@ -1443,6 +1443,29 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         synthRef.current.speak(utter);
       };
 
+      // 편집 거리 (Levenshtein Distance) 계산기 - 딕테이션 1글자 오타 관용 판정용
+      const getLevenshteinDistance = (a, b) => {
+        if (!a || !b) return (a || b || '').length;
+        const s1 = a.toLowerCase().trim();
+        const s2 = b.toLowerCase().trim();
+        if (s1 === s2) return 0;
+        const m = s1.length;
+        const n = s2.length;
+        const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+        for (let i = 0; i <= m; i++) dp[i][0] = i;
+        for (let j = 0; j <= n; j++) dp[0][j] = j;
+        for (let i = 1; i <= m; i++) {
+          for (let j = 1; j <= n; j++) {
+            if (s1[i - 1] === s2[j - 1]) {
+              dp[i][j] = dp[i - 1][j - 1];
+            } else {
+              dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+            }
+          }
+        }
+        return dp[m][n];
+      };
+
       // [신규 고도화] NEIS(나이스) 세특 정밀 바이트(1500B) 계산기
       const calculateNeisBytes = (text) => {
         if (!text) return { bytes: 0, chars: 0 };
@@ -2031,26 +2054,49 @@ ${spokenText}
           const userMc = answers[item.id]?.mc;
           const userSa = (answers[item.id]?.sa || '').trim().toLowerCase();
           const isMcCorrect = userMc === item.mcAnswerIndex;
-          const isSaCorrect = (item.saAcceptedAnswers || []).some(ans => ans.trim().toLowerCase() === userSa);
+
+          const acceptedList = (item.saAcceptedAnswers || [item.saBlankWord || '']).map(a => (a || '').trim().toLowerCase());
+          const isExactSaCorrect = acceptedList.includes(userSa);
+
+          let isSaTolerant = false;
+          let tolerantExpected = item.saBlankWord || '';
+
+          // [신규 고도화] 딕테이션 1글자 오타 관용 판정 (4글자 이상 단어 중 편집 거리 1 인정)
+          if (!isExactSaCorrect && userSa.length >= 4) {
+            for (const ans of acceptedList) {
+              if (ans.length >= 4 && getLevenshteinDistance(userSa, ans) === 1) {
+                isSaTolerant = true;
+                tolerantExpected = ans;
+                break;
+              }
+            }
+          }
+
+          const isSaCorrect = isExactSaCorrect || isSaTolerant;
 
           if (isMcCorrect) correctMc += 1;
           if (isSaCorrect) correctSa += 1;
 
-          if (!isMcCorrect || !isSaCorrect) {
+          if (!isMcCorrect || !isExactSaCorrect) {
             newWrongs.push({
               id: Date.now() + '-' + item.id, grade, topicCategory: item.topicCategory,
               questionCategory: item.questionCategory, accent: item.accent, blankWord: item.saBlankWord
             });
           }
-          return { ...item, userMc, userSa, isMcCorrect, isSaCorrect };
+          return { ...item, userMc, userSa, isMcCorrect, isSaCorrect, isExactSaCorrect, isSaTolerant, tolerantExpected };
         });
 
         const currentScore = (correctMc + correctSa) * 15;
         const maxScore = testData.length * 30;
 
-        const detailedStats = detailed.map((d, index) => 
-          `문항 ${index + 1}:\n- [${d.accent.toUpperCase()} 엑센트] 주제: ${d.topicCategory}, 유형: ${d.questionCategory}\n- 객관식: ${d.isMcCorrect ? '정답' : `오답 (학생 선택: ${d.userMc !== undefined ? d.mcOptions[d.userMc] : '미선택'}, 실제 정답: ${d.mcOptions[d.mcAnswerIndex]})`}\n- 주관식(딕테이션): ${d.isSaCorrect ? '정답' : `오답 (학생 입력: "${d.userSa}", 실제 정답: "${d.saBlankWord}")`}`
-        ).join('\n\n');
+        const detailedStats = detailed.map((d, index) => {
+          const saReport = d.isExactSaCorrect
+            ? '정답 (완벽 일치)'
+            : d.isSaTolerant
+            ? `정답 인정 (1글자 오타 관용 판정: 학생 입력 "${d.userSa}", 표준 정답 "${d.saBlankWord}") - 사소한 철자 오타를 주의하도록 격려할 것`
+            : `오답 (학생 입력: "${d.userSa || '(미입력)'}", 실제 정답: "${d.saBlankWord}")`;
+          return `문항 ${index + 1}:\n- [${d.accent.toUpperCase()} 엑센트] 주제: ${d.topicCategory}, 유형: ${d.questionCategory}\n- 객관식: ${d.isMcCorrect ? '정답' : `오답 (학생 선택: ${d.userMc !== undefined ? d.mcOptions[d.userMc] : '미선택'}, 실제 정답: ${d.mcOptions[d.mcAnswerIndex]})`}\n- 주관식(딕테이션): ${saReport}`;
+        }).join('\n\n');
 
         const studentGradeNum = parseInt(studentInfo.schoolGrade, 10);
         const examGradeNum = parseInt(grade, 10);
@@ -2340,6 +2386,89 @@ ${feedbackList.slice(-3).join('\n')}
         link.click();
         document.body.removeChild(link);
         showToast("성적 엑셀(CSV) 파일이 다운로드되었습니다!", "success");
+      };
+
+      // [신규 고도화] NEIS 나이스 생활기록부 엑셀 붙여넣기용 일괄 탭(TSV) 복사기
+      const copyNeisBatchToClipboard = () => {
+        if (!dashboardData || dashboardData.length === 0) {
+          showToast("복사할 학생 데이터가 없습니다.", "error");
+          return;
+        }
+
+        const targetList = dashboardData.filter(row => {
+          if (filterGrade && String(row['학년'] || row['schoolGrade']) !== String(filterGrade)) return false;
+          if (filterClass && String(row['반'] || row['classNum']) !== String(filterClass)) return false;
+          if (filterNum && String(row['번호'] || row['studentNum']) !== String(filterNum)) return false;
+          if (filterName && !(row['이름'] || row['name'] || '').includes(filterName)) return false;
+          return true;
+        });
+
+        if (targetList.length === 0) {
+          showToast("선택된 필터 조건에 부합하는 학생이 없습니다.", "error");
+          return;
+        }
+
+        // 고유 학생별 그룹화
+        const studentMap = new Map();
+        targetList.forEach(r => {
+          const sName = r['이름'] || r['name'] || '';
+          const sGrade = r['학년'] || r['schoolGrade'] || '';
+          const sClass = r['반'] || r['classNum'] || '';
+          const sNum = r['번호'] || r['studentNum'] || '';
+          const key = `${sGrade}-${sClass}-${sNum}-${sName}`;
+          if (!studentMap.has(key)) {
+            studentMap.set(key, { sGrade, sClass, sNum, sName, key, rows: [] });
+          }
+          studentMap.get(key).rows.push(r);
+        });
+
+        // 학년 ➔ 반 ➔ 번호 순 정렬
+        const sortedStudents = Array.from(studentMap.values()).sort((a, b) => {
+          if (Number(a.sGrade) !== Number(b.sGrade)) return Number(a.sGrade) - Number(b.sGrade);
+          if (Number(a.sClass) !== Number(b.sClass)) return Number(a.sClass) - Number(b.sClass);
+          return Number(a.sNum) - Number(b.sNum);
+        });
+
+        const tsvLines = [];
+        // NEIS 나이스 엑셀 업로드 호환 표준 헤더
+        tsvLines.push(["학년", "반", "번호", "성명", "과목별 세부능력 및 특기사항 (NEIS 250~300B)"].join("\t"));
+
+        let autoCount = 0;
+        sortedStudents.forEach(st => {
+          const studentKey = `${st.sGrade}학년 ${st.sClass}반 ${st.sNum}번 ${st.sName}`;
+          let seTeukText = seTeukResult[studentKey];
+
+          if (!seTeukText) {
+            // 개별 생성 버튼을 누르지 않은 학생은 누적 성적/오답 기반 250~300B 표준 문구 즉석 보강
+            let totalQ = 0;
+            let correctQ = 0;
+            st.rows.forEach(r => {
+              ['Q1', 'Q2', 'Q3', 'q1Result', 'q2Result', 'q3Result'].forEach(k => {
+                if (r[k] !== undefined && r[k] !== "") {
+                  totalQ++;
+                  if (String(r[k]).trim().toUpperCase() === 'O') correctQ++;
+                }
+              });
+            });
+            const accuracy = totalQ > 0 ? Math.round((correctQ / totalQ) * 100) : 75;
+            seTeukText = accuracy >= 80 
+              ? `교내 정기 초개인화 듣기평가에서 영국·미국식 연음 변별력과 문맥 추론 능력을 발휘함. 딕테이션 빈칸 어휘 인출이 정확하며 쉐도잉 훈련을 통해 실전 청취 감각을 체계적으로 다짐.`
+              : `교내 맞춤형 듣기평가에 주도적으로 참여하여 취약 엑센트와 연음 현상을 집중 학습함. 딕테이션 오답 분석과 쉐도잉 반복 훈련을 꾸준히 병행하며 청취 이해도를 꾸준히 향상시킴.`;
+            autoCount++;
+          }
+
+          // 엑셀 셀 줄바꿈 파손 방지
+          const cleanText = seTeukText.replace(/[\r\n]+/g, ' ').trim();
+          tsvLines.push([st.sGrade, st.sClass, st.sNum, st.sName, cleanText].join("\t"));
+        });
+
+        const tsvString = tsvLines.join("\n");
+        navigator.clipboard.writeText(tsvString).then(() => {
+          showToast(`총 ${sortedStudents.length}명 학생의 NEIS 세특이 클립보드에 일괄 복사되었습니다! (엑셀이나 나이스에 바로 Ctrl+V 하세요)`, "success");
+        }).catch(err => {
+          console.error("Clipboard copy failed:", err);
+          showToast("클립보드 복사 중 오류가 발생했습니다.", "error");
+        });
       };
 
       const handleLogin = () => {
@@ -3761,8 +3890,14 @@ ${feedbackList.slice(-3).join('\n')}
                           <span className={`text-xs font-bold px-2 py-0.5 rounded border ${item.isMcCorrect ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-rose-50 text-rose-700 border-rose-300'}`}>
                             객관식: {item.isMcCorrect ? 'O 정답' : 'X 오답'}
                           </span>
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded border ${item.isSaCorrect ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-rose-50 text-rose-700 border-rose-300'}`}>
-                            주관식: {item.isSaCorrect ? 'O 정답' : 'X 오답'}
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded border ${
+                            item.isSaCorrect 
+                              ? item.isSaTolerant 
+                                ? 'bg-amber-50 text-amber-800 border-amber-300' 
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-300' 
+                              : 'bg-rose-50 text-rose-700 border-rose-300'
+                          }`}>
+                            주관식: {item.isSaCorrect ? (item.isSaTolerant ? '⚠️ 1글자 오타 관용 정답' : 'O 정답') : 'X 오답'}
                           </span>
                         </div>
 
@@ -3792,6 +3927,35 @@ ${feedbackList.slice(-3).join('\n')}
                           </button>
                         </div>
                       </div>
+
+                      {/* [신규 고도화] 주관식 딕테이션 1글자 오타 관용 정답 알림 및 오답 안내 */}
+                      {item.isSaTolerant && (
+                        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2 shadow-xs animate-fade-in">
+                          <div className="flex items-center gap-2">
+                            <span className="text-base">⚠️</span>
+                            <div>
+                              <strong className="text-amber-800">[1글자 오타 관용 정답 인정]</strong> 사소한 철자 1글자 차이로 정답(15점)으로 정상 산입되었습니다.
+                              <div className="mt-0.5 text-[11px] text-slate-700">
+                                학생 입력: <code className="bg-white px-1.5 py-0.5 rounded border border-amber-200 font-mono font-bold text-rose-600">"{item.userSa}"</code> ➔ 올바른 표준 철자: <code className="bg-white px-1.5 py-0.5 rounded border border-emerald-300 font-mono font-bold text-emerald-700">"{item.saBlankWord}"</code>
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full">
+                            +15점 획득 (철자 복습 권장)
+                          </span>
+                        </div>
+                      )}
+                      {!item.isSaCorrect && (
+                        <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-950 flex items-center gap-2 animate-fade-in">
+                          <span className="text-base">❌</span>
+                          <div>
+                            <strong className="text-rose-800">[주관식 딕테이션 오답]</strong>
+                            <div className="mt-0.5 text-[11px] text-slate-700">
+                              학생 입력: <code className="bg-white px-1.5 py-0.5 rounded border border-rose-200 font-mono text-rose-600">{item.userSa || '(미입력)'}</code> ➔ 실제 정답: <code className="bg-white px-1.5 py-0.5 rounded border border-emerald-300 font-mono font-bold text-emerald-700">"{item.saBlankWord}"</code>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {/* 결과 모드 실시간 화자 LCD 표시 */}
                       {playingId === item.id && activeSpeakerIndicator && (
@@ -4161,8 +4325,15 @@ ${feedbackList.slice(-3).join('\n')}
                         🔄 새로고침
                       </button>
                       <button 
+                        onClick={copyNeisBatchToClipboard} 
+                        className="skeuo-btn skeuo-btn-teal px-3 py-2 text-xs font-bold text-white flex items-center gap-1.5 shadow-sm"
+                        title="학급 학생 전체의 250~300B NEIS 과세특을 엑셀 및 나이스 프로그램에 바로 붙여넣을 수 있는 탭(TSV) 양식으로 일괄 복사합니다."
+                      >
+                        📋 NEIS 세특 일괄 복사
+                      </button>
+                      <button 
                         onClick={downloadDashboardCSV} 
-                        className="skeuo-btn skeuo-btn-teal px-3 py-2 text-xs font-bold text-white flex items-center gap-1.5"
+                        className="skeuo-btn px-3 py-2 text-xs font-bold text-slate-700 flex items-center gap-1.5"
                       >
                         📥 엑셀(CSV) 다운로드
                       </button>
@@ -4281,7 +4452,7 @@ ${feedbackList.slice(-3).join('\n')}
                         📋 응시 내역 및 성적표 ({filteredList.length}건)
                       </h3>
                       <span className="text-[11px] text-slate-300">
-                        * '✨ 세특 생성' 클릭 시 학생별 누적 성적 기반 NEIS 과세특 문구가 생성됩니다.
+                        * 개별 학생 '✨ 세특 생성' 또는 상단 <strong>[📋 NEIS 세특 일괄 복사]</strong>로 엑셀 및 나이스(NEIS)에 바로 붙여넣기할 수 있습니다.
                       </span>
                     </div>
 
