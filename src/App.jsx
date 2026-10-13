@@ -719,6 +719,58 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         };
       }, []);
 
+      // [신규 고도화] 어학기 전용 키보드 단축키 시스템 (Space: 재생/정지, ←/→: 3초 이동)
+      useEffect(() => {
+        const handleKeyDown = (e) => {
+          // 인풋 필드, 텍스트에어리어 등 입력 중에는 단축키 비활성화
+          const target = e.target;
+          const tagName = target ? target.tagName.toLowerCase() : '';
+          if (tagName === 'input' || tagName === 'textarea' || (target && target.isContentEditable)) {
+            return;
+          }
+
+          if (e.code === 'Space') {
+            e.preventDefault();
+            // 재생 중이면 즉시 중단, 멈춰있으면 상황에 맞게 재생 시작
+            if (playingId || isContinuousPlaying || (currentAudioRef.current && !currentAudioRef.current.paused)) {
+              stopSpeech();
+              showToast("⏹ 재생 일시정지 (Space)", "info");
+            } else {
+              if (examState === 'taking' && testData && testData.length > 0) {
+                playSpeech(testData[0], 1);
+                showToast("▶ 1번 문항 재생 시작 (Space)", "success");
+              } else if (examState === 'result' && scoreInfo?.detailedResults?.length > 0) {
+                playSpeech(scoreInfo.detailedResults[0], 1);
+                showToast("▶ 1번 문항 다시 듣기 (Space)", "success");
+              }
+            }
+          } else if (e.code === 'ArrowLeft') {
+            // 3초 뒤로 리와인드 (또는 빈칸 타겟 3초 핀포인트 재생)
+            if (currentAudioRef.current && !currentAudioRef.current.paused) {
+              e.preventDefault();
+              currentAudioRef.current.currentTime = Math.max(0, currentAudioRef.current.currentTime - 3);
+              showToast("⏪ 3초 뒤로 (←)", "info");
+            } else if (examState === 'result' && scoreInfo?.detailedResults?.length > 0) {
+              e.preventDefault();
+              playSaTargetSnippet(scoreInfo.detailedResults[0]);
+            } else if (examState === 'taking' && testData && testData.length > 0) {
+              e.preventDefault();
+              playSaTargetSnippet(testData[0]);
+            }
+          } else if (e.code === 'ArrowRight') {
+            // 3초 앞으로 이동
+            if (currentAudioRef.current && !currentAudioRef.current.paused) {
+              e.preventDefault();
+              currentAudioRef.current.currentTime = Math.min((currentAudioRef.current.duration || 999), currentAudioRef.current.currentTime + 3);
+              showToast("⏩ 3초 앞으로 (→)", "info");
+            }
+          }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+      }, [playingId, isContinuousPlaying, examState, testData, scoreInfo]);
+
       const showToast = (msg, type = 'success') => {
         setToast({ show: true, message: msg, type });
         setTimeout(() => setToast(prev => ({ ...prev, show: false })), 4000);
@@ -3590,6 +3642,14 @@ ${feedbackList.slice(-3).join('\n')}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      {/* [신규] 키보드 단축키 안내 뱃지 */}
+                      <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-100 border border-slate-300 text-[11px] font-medium text-slate-600 font-mono shadow-xs" title="스페이스바: 재생/일시정지 토글, 좌/우 방향키: 3초 이동">
+                        <span className="font-bold text-teal-700">⌨️ 단축키:</span>
+                        <span>[Space] 재생/정지</span>
+                        <span>·</span>
+                        <span>[← / →] 3초 탐색</span>
+                      </span>
+
                       {/* [신규 고도화] 1~3번 전 문항 연속 실전 듣기 마스터 버튼 */}
                       <button 
                         type="button"
@@ -3800,6 +3860,16 @@ ${feedbackList.slice(-3).join('\n')}
             {/* RESULT VIEW (스큐어모피즘 어학기 오답 클리닉 & 정밀 분석 덱) */}
             {examState === 'result' && (
               <div className="space-y-6 animate-fade-in">
+                {/* [인쇄 전용] A4 수능/학평 오답 클리닉 공식 시험지 헤더 */}
+                <div className="print-only exam-print-header">
+                  <h1 className="exam-print-title">2026학년도 고등학교 영어듣기평가 클리닉 학습지 및 성적표</h1>
+                  <div className="exam-print-meta">
+                    <span><strong>수험생:</strong> {studentInfo.schoolGrade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번 {studentInfo.name}</span>
+                    <span><strong>최종 점수:</strong> {scoreInfo.totalScore} / {scoreInfo.maxScore}점 ({scoreInfo.totalScore >= 80 ? '1등급 수준' : scoreInfo.totalScore >= 60 ? '2~3등급 수준' : '클리닉 필요'})</span>
+                    <span><strong>제출 일시:</strong> {scoreInfo.submittedAt || new Date().toLocaleString('ko-KR')}</span>
+                  </div>
+                </div>
+
                 {/* 상단 에메랄드 LCD 디지털 스코어보드 */}
                 <div className="skeuo-deck p-6 sm:p-8 space-y-4">
                   <div className="flex flex-wrap justify-between items-center gap-3 border-b border-slate-300 pb-3">
@@ -3816,7 +3886,15 @@ ${feedbackList.slice(-3).join('\n')}
                         )}
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* [신규] 키보드 단축키 안내 뱃지 */}
+                      <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-100 border border-slate-300 text-[11px] font-medium text-slate-600 font-mono shadow-xs" title="스페이스바: 재생/일시정지 토글, 좌측 방향키: 빈칸 3초 핀포인트">
+                        <span className="font-bold text-teal-700">⌨️ 단축키:</span>
+                        <span>[Space] 재생/정지</span>
+                        <span>·</span>
+                        <span>[←] 3초 핀포인트</span>
+                      </span>
+
                       <button 
                         type="button"
                         onClick={handleGoBack} 
@@ -3828,10 +3906,10 @@ ${feedbackList.slice(-3).join('\n')}
                       </button>
                       <button 
                         onClick={() => window.print()} 
-                        className="skeuo-btn px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 text-slate-700"
-                        title="오답노트 및 성적표 인쇄"
+                        className="skeuo-btn skeuo-btn-teal px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 text-white shadow-xs"
+                        title="A4 시험지형 오답노트 및 성적표 인쇄 (PDF 저장 가능)"
                       >
-                        🖨️ 성적표 인쇄
+                        🖨️ A4 시험지형 인쇄
                       </button>
                     </div>
                   </div>
@@ -3876,11 +3954,11 @@ ${feedbackList.slice(-3).join('\n')}
                     <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
                       <span>📋 문항별 정밀 리뷰 및 핀포인트 클리닉</span>
                     </h3>
-                    <span className="text-xs text-slate-500 font-medium">오답 문항의 핵심 구간을 핀포인트로 반복 청취하세요.</span>
+                    <span className="text-xs text-slate-500 font-medium no-print">오답 문항의 핵심 구간을 핀포인트로 반복 청취하세요.</span>
                   </div>
 
                   {scoreInfo.detailedResults.map((item, idx) => (
-                    <div key={item.id} className="skeuo-deck p-5 space-y-4">
+                    <div key={item.id} className="skeuo-deck print-item-card p-5 space-y-4">
                       {/* 문항 상단 상태 바 */}
                       <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-300 pb-3">
                         <div className="flex items-center gap-2">
@@ -3902,7 +3980,7 @@ ${feedbackList.slice(-3).join('\n')}
                         </div>
 
                         {/* 재생 컨트롤 데크 */}
-                        <div className="flex flex-wrap items-center gap-1.5 skeuo-inset p-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5 skeuo-inset p-1.5 no-print">
                           <button 
                             onClick={() => playSpeech(item, idx + 1)} 
                             className={`skeuo-btn px-2.5 py-1 text-xs font-bold flex items-center gap-1 ${playingId === item.id && !isPaused ? 'skeuo-btn-teal text-white' : 'text-slate-800'}`}>
@@ -3959,7 +4037,7 @@ ${feedbackList.slice(-3).join('\n')}
 
                       {/* 결과 모드 실시간 화자 LCD 표시 */}
                       {playingId === item.id && activeSpeakerIndicator && (
-                        <div className="skeuo-lcd p-2.5 flex items-center justify-between animate-fade-in text-xs font-mono">
+                        <div className="skeuo-lcd p-2.5 flex items-center justify-between animate-fade-in text-xs font-mono no-print">
                           <div className="flex items-center gap-2">
                             <span className="text-sm animate-pulse">🎧</span>
                             <span className="font-bold tracking-wide flex items-center gap-1.5">
@@ -4033,7 +4111,7 @@ ${feedbackList.slice(-3).join('\n')}
                       )}
 
                       {/* 쉐도잉 발음 정밀 코칭 데크 */}
-                      <div className="skeuo-inset p-3.5 space-y-2">
+                      <div className="skeuo-inset p-3.5 space-y-2 no-print">
                         <div className="flex flex-wrap justify-between items-center gap-2">
                           <div className="flex items-center gap-1.5">
                             <span className="text-sm">🎙️</span>
@@ -4074,7 +4152,7 @@ ${feedbackList.slice(-3).join('\n')}
 
                       {/* 대화형 롤플레잉 회화 데크 */}
                       {item.transcript.includes('M:') && item.transcript.includes('W:') && (
-                        <div className="skeuo-deck p-3.5 space-y-3">
+                        <div className="skeuo-deck p-3.5 space-y-3 no-print">
                           <div className="flex justify-between items-center border-b border-slate-300 pb-2">
                             <h4 className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
                               <span>🎭 실전 회화 롤플레잉 (Interactive Role-Play)</span>
@@ -4175,7 +4253,7 @@ ${feedbackList.slice(-3).join('\n')}
                 </div>
 
                 {/* 학습 결과 제출 및 복귀 덱 */}
-                <div className="skeuo-deck p-5 flex flex-wrap justify-between items-center gap-3">
+                <div className="skeuo-deck p-5 flex flex-wrap justify-between items-center gap-3 no-print">
                   <div>
                     <h3 className="text-sm font-black text-slate-800">
                       📊 학습 결과 클라우드 저장
@@ -4193,7 +4271,7 @@ ${feedbackList.slice(-3).join('\n')}
                   </button>
                 </div>
 
-                <div className="pt-2">
+                <div className="pt-2 no-print">
                   <button 
                     onClick={() => { stopSpeech(); setExamState('idle'); setHasSubmitted(false); fetchStudentStats(); }} 
                     className="skeuo-btn w-full py-3.5 text-sm font-black text-slate-800 tracking-wide"
