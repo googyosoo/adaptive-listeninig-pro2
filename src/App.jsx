@@ -104,6 +104,13 @@ import { RadarChartWidget } from './components/RadarChartWidget';
       const [playbackRate, setPlaybackRate] = useState(1.0);
       const synthRef = useRef(window.speechSynthesis);
       const utterancesRef = useRef([]);
+
+      // [신규 고도화] 틀린 문제 1:1 쌍둥이 변형 문항 상태
+      const [generatingTwinId, setGeneratingTwinId] = useState(null); // 단일 쌍둥이 생성 로딩 ID
+      const [twinQuestionsMap, setTwinQuestionsMap] = useState({}); // { [originalItemId]: twinQuestion }
+      const [twinAnswersMap, setTwinAnswersMap] = useState({}); // { [originalItemId]: { mc: null, sa: '', isGraded: false, isMcCorrect: false, isSaCorrect: false, isSaTolerant: false, score: 0 } }
+      const [activeTwinDeckId, setActiveTwinDeckId] = useState(null); // 현재 펼쳐진 쌍둥이 클리닉 덱 ID
+      const [isBatchGeneratingTwins, setIsBatchGeneratingTwins] = useState(false); // 전체 오답 쌍둥이 일괄 생성 로딩
       
       // Google Identity Services (GIS) JWT 토큰 디코더 (한글 깨짐 없는 Base64 URL 디코딩)
       const parseJwt = (token) => {
@@ -2136,6 +2143,312 @@ import { RadarChartWidget } from './components/RadarChartWidget';
           linguisticExplanation: '철자와 소리가 대체로 일치하는 기본 음운 체계를 따릅니다.',
           clinicTip: '모음의 장단과 강세(Accent) 위치를 확인하며 정확한 철자로 복습하세요.'
         };
+      };
+
+      // [신규 고도화] 고품질 결정론적 1:1 쌍둥이 변형 문제 생성기 (Offline Fallback Engine)
+      const generateFallbackTwin = (orig) => {
+        const twinId = Date.now() + Math.floor(Math.random() * 1000);
+        
+        // 이름 및 인물 치환 맵
+        const nameMap = [
+          { from: /\bMike\b/g, to: 'Sarah' }, { from: /\bTom\b/g, to: 'Emma' },
+          { from: /\bDavid\b/g, to: 'Lisa' }, { from: /\bJohn\b/g, to: 'Rachel' },
+          { from: /\bMr\. Baker\b/g, to: 'Ms. Miller' }, { from: /\bMr\. Smith\b/g, to: 'Ms. Johnson' }
+        ];
+
+        // 장소 및 키워드 치환 맵
+        const placeMap = [
+          { from: /\blibrary\b/gi, to: 'science center' },
+          { from: /\bmuseum\b/gi, to: 'art hall' },
+          { from: /\bcafeteria\b/gi, to: 'student lounge' },
+          { from: /\bbookstore\b/gi, to: 'flower shop' },
+          { from: /\bgym\b/gi, to: 'community center' }
+        ];
+
+        // 일정 및 날짜 치환 맵
+        const timeMap = [
+          { from: /\bFriday\b/g, to: 'Thursday' },
+          { from: /\bMonday\b/g, to: 'Wednesday' },
+          { from: /\bSaturday\b/g, to: 'Sunday' },
+          { from: /\b3\s*o'clock\b/gi, to: "4 o'clock" },
+          { from: /\b2\s*p\.?m\.?/gi, to: '3:30 p.m.' },
+          { from: /\$20\b/g, to: '$35' },
+          { from: /\$10\b/g, to: '$15' }
+        ];
+
+        // 음운 규칙 쌍둥이 어휘 치환 맵 (동일 음운 카테고리 매칭)
+        const phoneticTwinWordMap = {
+          water: { word: 'city', hint: '명사 - 대도시를 뜻하는 단어 (플랩-T)' },
+          city: { word: 'better', hint: '형용사 - 더 좋은, 향상된 (플랩-T)' },
+          better: { word: 'party', hint: '명사 - 모임, 파티 (플랩-T)' },
+          receipt: { word: 'doubt', hint: '명사/동사 - 의심, 의심하다 (b 묵음)' },
+          doubt: { word: 'debt', hint: '명사 - 부채, 빚 (b 묵음)' },
+          listen: { word: 'castle', hint: '명사 - 성, 궁전 (t 묵음)' },
+          castle: { word: 'fasten', hint: '동사 - 매다, 고정하다 (t 묵음)' },
+          autumn: { word: 'column', hint: '명사 - 기둥, 칼럼 (n 묵음)' },
+          comfortable: { word: 'chocolate', hint: '명사 - 초콜릿 (슈와 모음약화)' },
+          chocolate: { word: 'vegetable', hint: '명사 - 채소, 야채 (슈와 모음약화)' },
+          handbag: { word: 'sandwich', hint: '명사 - 샌드위치 (자음 탈락)' }
+        };
+
+        let newTranscript = orig.transcript || '';
+        nameMap.forEach(m => { newTranscript = newTranscript.replace(m.from, m.to); });
+        placeMap.forEach(m => { newTranscript = newTranscript.replace(m.from, m.to); });
+        timeMap.forEach(m => { newTranscript = newTranscript.replace(m.from, m.to); });
+
+        const origBlankLower = (orig.saBlankWord || '').toLowerCase().trim();
+        let newBlankWord = orig.saBlankWord || 'practice';
+        let newHint = orig.saHint || '핵심 영어 어휘';
+
+        if (phoneticTwinWordMap[origBlankLower]) {
+          const mapped = phoneticTwinWordMap[origBlankLower];
+          newBlankWord = mapped.word;
+          newHint = mapped.hint;
+        }
+
+        // 대본 속에 새 단어가 포함되도록 자연스럽게 매핑
+        if (!newTranscript.toLowerCase().includes(newBlankWord.toLowerCase())) {
+          newTranscript = newTranscript + `\nW: That sounds like a wonderful ${newBlankWord}.`;
+        }
+
+        const lines = newTranscript.split('\n').filter(l => l.trim().toLowerCase().includes(newBlankWord.toLowerCase()));
+        let newSaQuestion = orig.saQuestion || '';
+        if (lines.length > 0) {
+          const targetLine = lines[0].replace(/^[MWmw남여]:\s*/, '');
+          const reg = new RegExp(`\\b${newBlankWord}\\b`, 'gi');
+          newSaQuestion = targetLine.replace(reg, '______');
+        } else {
+          newSaQuestion = `Please make sure to check the ______ carefully.`;
+        }
+
+        // 객관식 선택지 변형 (원본 의미를 유지하며 일부 어휘 치환)
+        const newOptions = (orig.mcOptions || ['1', '2', '3', '4', '5']).map((opt, oIdx) => {
+          let updated = opt;
+          nameMap.forEach(m => { updated = updated.replace(m.from, m.to); });
+          placeMap.forEach(m => { updated = updated.replace(m.from, m.to); });
+          timeMap.forEach(m => { updated = updated.replace(m.from, m.to); });
+          return updated;
+        });
+
+        return {
+          id: twinId,
+          isTwin: true,
+          parentQuestionId: orig.id,
+          twinTitle: `문항 ${orig.standardType || orig.questionCategory || '수능'} 1:1 쌍둥이 변형`,
+          type: orig.type || 'dialogue',
+          transcript: newTranscript,
+          standardType: orig.standardType || orig.questionCategory || '1. 목적 파악',
+          mcQuestion: orig.mcQuestion ? `[1:1 쌍둥이 변형] ${orig.mcQuestion}` : '대화를 듣고 알맞은 것을 고르시오.',
+          mcOptions: newOptions,
+          mcAnswerIndex: orig.mcAnswerIndex !== undefined ? orig.mcAnswerIndex : 0,
+          saQuestion: newSaQuestion,
+          saBlankWord: newBlankWord,
+          saHint: newHint,
+          saAcceptedAnswers: [newBlankWord, newBlankWord.toLowerCase(), newBlankWord.toUpperCase()],
+          translation: (orig.translation || '') + ' (1:1 쌍둥이 패러프레이징 변형 문항입니다.)',
+          accent: orig.accent || 'us',
+          topicCategory: orig.topicCategory || '학업/학교생활',
+          questionCategory: orig.questionCategory || '세부내용 파악',
+          vocabulary: orig.vocabulary || [{ word: newBlankWord, meaning: newHint }]
+        };
+      };
+
+      // [신규 고도화] AI 기반 1:1 쌍둥이 변형 문항 실시간 생성 엔진
+      const generateTwinQuestion = async (originalItem) => {
+        if (!originalItem) return;
+        setGeneratingTwinId(originalItem.id);
+        stopSpeech();
+
+        showToast(`문항의 1:1 쌍둥이 변형 문제를 생성 중입니다...`, "info");
+
+        const promptText = `당신은 대한민국 대학수학능력시험(CSAT) 및 EBS 영어듣기 최고 출제위원입니다.
+학생이 틀린 아래 문제에 대해, **동일한 출제 유형(${originalItem.standardType || originalItem.questionCategory})과 동일한 음운 함정을 가진 1:1 쌍둥이 변형 문제(Twin Variant Question)** 단 1문항을 엄격한 JSON으로 생성해 주세요.
+
+[원본 틀린 문제 정보]
+- 수능 표준 유형: ${originalItem.standardType || originalItem.questionCategory}
+- 대본 형식: ${originalItem.type || 'dialogue'}
+- 억양: ${originalItem.accent || 'us'}
+- 원본 대본:
+${originalItem.transcript}
+- 원본 객관식 문제: ${originalItem.mcQuestion}
+- 원본 객관식 정답 번호: ${originalItem.mcAnswerIndex} (${(originalItem.mcOptions || [])[originalItem.mcAnswerIndex] || ''})
+- 원본 주관식 단어: ${originalItem.saBlankWord}
+- 원본 주관식 문장: ${originalItem.saQuestion}
+
+[1:1 쌍둥이 변형 출제 원칙 - 100% 엄격 준수]
+1. [구조 및 유형 100% 일치]: 원본과 동일한 standardType, 동일한 type(${originalItem.type}), 동일한 accent(${originalItem.accent})를 유지할 것.
+2. [소재 및 인물 패러프레이징]: 대화의 주제와 난이도는 유사하지만, 등장인물(이름), 구체적 상황, 장소, 시간, 숫자 등의 세부 정보를 자연스럽고 참신하게 변경할 것.
+3. [대본 순수 발화 원칙]: 대본(transcript)에는 괄호 지문, 상황 묘사, 효과음 일체 없이 오직 M과 W의 1:1 교차 순수 영어 대사만 작성할 것.
+4. [음운 함정 쌍둥이 매칭]: 원본 주관식 단어("${originalItem.saBlankWord}")에 담긴 소리-철자 음운 규칙(묵음, 플랩-T, 연음, 슈와 약화 등)과 동등한 음운 특성을 가진 다른 핵심 단어를 새로운 saBlankWord로 지정할 것!
+5. [출력 JSON 형식]:
+{
+  "id": ${Date.now()},
+  "type": "${originalItem.type || 'dialogue'}",
+  "transcript": "...",
+  "standardType": "${originalItem.standardType || originalItem.questionCategory || '수능 영어 듣기'}",
+  "mcQuestion": "대화를 듣고...",
+  "mcOptions": ["1번 보기", "2번 보기", "3번 보기", "4번 보기", "5번 보기"],
+  "mcAnswerIndex": 0,
+  "saQuestion": "대본 속 문장에서 빈칸 단어만 ______로 바꾼 문장",
+  "saBlankWord": "핵심 단어 1개",
+  "saHint": "품사 및 한글 뜻 힌트",
+  "saAcceptedAnswers": ["단어", "단어 소문자"],
+  "translation": "한글 해석",
+  "accent": "${originalItem.accent || 'us'}",
+  "topicCategory": "${originalItem.topicCategory || '학교생활'}",
+  "questionCategory": "${originalItem.questionCategory || '세부정보'}",
+  "vocabulary": [{"word": "...", "meaning": "..."}]
+}`;
+
+        try {
+          const uKey = (upstageApiKey || "").trim();
+          const gKey = (customApiKey || "").trim();
+
+          let twinData = null;
+          if (uKey || gKey) {
+            const llmRes = await callUnifiedLlm({
+              systemPrompt: "You are the top English exam creator in Korea for the College Scholastic Ability Test (CSAT). You must output strictly valid JSON format.",
+              userPrompt: promptText,
+              responseFormatJson: true
+            });
+
+            if (llmRes) {
+              if (typeof llmRes === 'object' && llmRes.transcript && llmRes.saBlankWord) {
+                twinData = { ...llmRes, id: Date.now(), isTwin: true, parentQuestionId: originalItem.id };
+              } else if (typeof llmRes === 'string') {
+                const jsonMatch = llmRes.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                  const parsed = JSON.parse(jsonMatch[0]);
+                  if (parsed.transcript && parsed.saBlankWord) {
+                    twinData = { ...parsed, id: Date.now(), isTwin: true, parentQuestionId: originalItem.id };
+                  }
+                }
+              }
+            }
+          }
+
+          // AI 실패 시 결정론적 Fallback 엔진으로 즉시 복구
+          if (!twinData) {
+            twinData = generateFallbackTwin(originalItem);
+          }
+
+          setTwinQuestionsMap(prev => ({ ...prev, [originalItem.id]: twinData }));
+          setActiveTwinDeckId(originalItem.id);
+          // 답안 입력 상태 초기화
+          setTwinAnswersMap(prev => ({
+            ...prev,
+            [originalItem.id]: { mc: null, sa: '', isGraded: false, isMcCorrect: false, isSaCorrect: false, isSaTolerant: false, score: 0 }
+          }));
+
+          showToast(`🧬 1:1 쌍둥이 변형 문제가 즉시 생성되었습니다!`, "success");
+        } catch (err) {
+          console.error("Twin generation failed, falling back:", err);
+          const fb = generateFallbackTwin(originalItem);
+          setTwinQuestionsMap(prev => ({ ...prev, [originalItem.id]: fb }));
+          setActiveTwinDeckId(originalItem.id);
+          setTwinAnswersMap(prev => ({
+            ...prev,
+            [originalItem.id]: { mc: null, sa: '', isGraded: false, isMcCorrect: false, isSaCorrect: false, isSaTolerant: false, score: 0 }
+          }));
+          showToast(`🧬 사전 검증 엔진으로 1:1 쌍둥이 문제가 생성되었습니다!`, "success");
+        } finally {
+          setGeneratingTwinId(null);
+        }
+      };
+
+      // [신규 고도화] 쌍둥이 문제 즉시 채점 및 피드백 엔진
+      const gradeTwinQuestion = (originalItemId) => {
+        const twin = twinQuestionsMap[originalItemId];
+        const userAns = twinAnswersMap[originalItemId];
+        if (!twin || !userAns) return;
+
+        const isMcCorrect = userAns.mc === twin.mcAnswerIndex;
+        const userSaClean = (userAns.sa || '').trim().toLowerCase();
+        const accepted = (twin.saAcceptedAnswers || [twin.saBlankWord]).map(a => (a || '').trim().toLowerCase());
+        const isExactSaCorrect = accepted.includes(userSaClean);
+        
+        let isSaTolerant = false;
+        if (!isExactSaCorrect && userSaClean.length >= 4) {
+          for (const ans of accepted) {
+            if (ans.length >= 4 && getLevenshteinDistance(userSaClean, ans) === 1) {
+              isSaTolerant = true;
+              break;
+            }
+          }
+        }
+        const isSaCorrect = isExactSaCorrect || isSaTolerant;
+        const score = (isMcCorrect ? 15 : 0) + (isSaCorrect ? 15 : 0);
+
+        setTwinAnswersMap(prev => ({
+          ...prev,
+          [originalItemId]: {
+            ...prev[originalItemId],
+            isGraded: true,
+            isMcCorrect,
+            isSaCorrect,
+            isExactSaCorrect,
+            isSaTolerant,
+            score
+          }
+        }));
+
+        if (score === 30) {
+          showToast(`🎉 축하합니다! 쌍둥이 문제 30점 만점으로 오답을 완벽 극복했습니다!`, "success");
+          try {
+            if (typeof confetti === 'function') {
+              confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+            }
+          } catch(e) {}
+        } else if (score > 0) {
+          showToast(`💡 쌍둥이 문제 ${score}점 획득! 정답과 음운 해설을 확인하세요.`, "info");
+        } else {
+          showToast(`❌ 오답입니다. 대본과 음운 규칙 해설을 꼼꼼히 확인해 보세요.`, "error");
+        }
+      };
+
+      // [신규 고도화] 전체 오답 문항 1:1 쌍둥이 클리닉 모의고사 세트 생성 및 시작
+      const startTwinClinicExam = async () => {
+        if (!scoreInfo || !scoreInfo.detailedResults) return;
+        const wrongItems = scoreInfo.detailedResults.filter(it => !it.isMcCorrect || !it.isSaCorrect);
+        if (wrongItems.length === 0) {
+          showToast("틀린 문항이 없습니다! 완벽한 실력입니다.", "success");
+          return;
+        }
+
+        setIsBatchGeneratingTwins(true);
+        stopSpeech();
+        showToast(`틀린 ${wrongItems.length}개 문항의 1:1 쌍둥이 모의고사를 구성 중입니다...`, "info");
+
+        try {
+          const twinExamList = [];
+          for (let i = 0; i < wrongItems.length; i++) {
+            const orig = wrongItems[i];
+            let twin = twinQuestionsMap[orig.id];
+            if (!twin) {
+              twin = generateFallbackTwin(orig);
+            }
+            twinExamList.push({
+              ...twin,
+              id: Date.now() + i,
+              standardType: orig.standardType || orig.questionCategory || '1:1 쌍둥이 클리닉'
+            });
+          }
+
+          setTestData(twinExamList);
+          setAnswers({});
+          setHintLevels({});
+          setHasSubmitted(false);
+          setPlayCountMap({});
+          setExamTimer(twinExamList.length * 120);
+          setExamState('taking');
+
+          showToast(`🧬 틀린 문항 1:1 쌍둥이 클리닉 모의고사(${twinExamList.length}문항)를 시작합니다!`, "success");
+        } catch (err) {
+          console.error("Batch twin exam failed:", err);
+          showToast("쌍둥이 모의고사 세트 생성 중 오류가 발생했습니다.", "error");
+        } finally {
+          setIsBatchGeneratingTwins(false);
+        }
       };
 
       // Exam Bank 사전 기출 세트 즉시 로드 (로딩 지연 0초)
@@ -4541,6 +4854,43 @@ ${feedbackList.slice(-3).join('\n')}
                       {scoreInfo.totalScore >= 80 ? '⭐ [1등급 수준] 탁월한 청해 및 맥락 추론 능력입니다.' : scoreInfo.totalScore >= 60 ? '💡 [2~3등급 수준] 주관식 연음 및 세부 정보 파악을 보강하세요.' : '🎯 [클리닉 필요] 아래 핀포인트 3초 구간반복 및 쉐도잉을 진행하세요.'}
                     </div>
                   </div>
+
+                  {/* [신규 고도화] 틀린 문항 1:1 쌍둥이 클리닉 모의고사 바로 시작 배너 */}
+                  {scoreInfo.detailedResults && scoreInfo.detailedResults.some(it => !it.isMcCorrect || !it.isSaCorrect) && (
+                    <div className="bg-gradient-to-r from-indigo-950 via-purple-900 to-slate-900 p-4 rounded-xl text-white flex flex-wrap justify-between items-center gap-3 shadow-lg border border-indigo-500/40 no-print animate-fade-in mt-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">🧬</span>
+                          <span className="font-black text-sm text-indigo-200 tracking-wide">
+                            오답 극복 1:1 쌍둥이 변형 클리닉
+                          </span>
+                          <span className="bg-rose-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full font-mono">
+                            {scoreInfo.detailedResults.filter(it => !it.isMcCorrect || !it.isSaCorrect).length}개 문항 오답 발생
+                          </span>
+                        </div>
+                        <p className="text-xs text-indigo-100/80">
+                          틀린 문제의 수능 표준 유형 및 음운 규칙 함정을 100% 모방한 '쌍둥이 변형 모의고사'로 실수를 완벽 정복하세요.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={startTwinClinicExam}
+                        disabled={isBatchGeneratingTwins}
+                        className="skeuo-btn px-4 py-2 text-xs font-black bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md flex items-center gap-1.5 transition-all transform hover:scale-105"
+                      >
+                        {isBatchGeneratingTwins ? (
+                          <>
+                            <span className="animate-spin">⏳</span>
+                            <span>쌍둥이 세트 구성 중...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>🧬 틀린 문제 1:1 쌍둥이 모의고사 시작 ➔</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* AI 선생님 종합 피드백 패널 */}
@@ -4587,6 +4937,34 @@ ${feedbackList.slice(-3).join('\n')}
                           }`}>
                             주관식: {item.isSaCorrect ? (item.isSaTolerant ? '⚠️ 1글자 오타 관용 정답' : 'O 정답') : 'X 오답'}
                           </span>
+
+                          {/* [신규 고도화] 1:1 쌍둥이 변형 문제 즉시 생성 및 토글 버튼 */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (twinQuestionsMap[item.id]) {
+                                setActiveTwinDeckId(activeTwinDeckId === item.id ? null : item.id);
+                              } else {
+                                generateTwinQuestion(item);
+                              }
+                            }}
+                            disabled={generatingTwinId === item.id}
+                            className={`skeuo-btn px-2.5 py-0.5 text-xs font-bold flex items-center gap-1 transition-all no-print ${
+                              (!item.isMcCorrect || !item.isSaCorrect)
+                                ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-xs'
+                                : 'bg-slate-100 text-indigo-900 border border-indigo-200 hover:bg-indigo-50'
+                            }`}
+                            title="이 문제와 동일한 수능 유형 및 음운 규칙을 가진 1:1 쌍둥이 변형 문제를 생성합니다."
+                          >
+                            <span>🧬</span>
+                            <span>
+                              {generatingTwinId === item.id 
+                                ? '쌍둥이 생성 중...' 
+                                : twinQuestionsMap[item.id]
+                                ? (activeTwinDeckId === item.id ? '쌍둥이 닫기' : '쌍둥이 풀기')
+                                : '1:1 쌍둥이 변형 출제'}
+                            </span>
+                          </button>
                         </div>
 
                         {/* 재생 컨트롤 데크 */}
@@ -4956,6 +5334,206 @@ ${feedbackList.slice(-3).join('\n')}
                                   </p>
                                 </div>
                               )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* [신규 고도화] 1:1 쌍둥이 변형 문항 실전 클리닉 덱 */}
+                      {generatingTwinId === item.id && (
+                        <div className="bg-indigo-50/90 border border-indigo-300 rounded-xl p-4 text-center space-y-2 no-print animate-fade-in shadow-inner">
+                          <div className="flex justify-center items-center gap-2 text-indigo-700 font-bold text-xs">
+                            <span className="animate-spin text-base">⏳</span>
+                            <span>수능 출제위원이 {idx + 1}번 문항 기반 1:1 쌍둥이 변형 문제를 실시간 출제 중입니다...</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">동일한 수능 표준 유형 및 음운 규칙 함정을 담은 맞춤 변형 문항이 준비됩니다.</p>
+                        </div>
+                      )}
+
+                      {twinQuestionsMap[item.id] && (
+                        <div className="bg-gradient-to-br from-indigo-50/90 via-white to-purple-50/90 border-2 border-indigo-300 rounded-2xl p-5 space-y-4 shadow-md no-print animate-fade-in">
+                          {/* 쌍둥이 헤더 바 */}
+                          <div className="flex flex-wrap justify-between items-center gap-2 border-b border-indigo-200 pb-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xl">🧬</span>
+                              <div>
+                                <h4 className="font-black text-sm text-indigo-950 flex items-center gap-2">
+                                  <span>1:1 쌍둥이 변형 클리닉 실전 훈련</span>
+                                  <span className="text-[10px] font-bold bg-indigo-600 text-white px-2 py-0.5 rounded-full font-mono">
+                                    {twinQuestionsMap[item.id].standardType || '수능 실전 유형'}
+                                  </span>
+                                </h4>
+                                <span className="text-[11px] text-slate-500 font-medium">
+                                  {idx + 1}번 오답 극복: 동일 유형 + 동일 억양({twinQuestionsMap[item.id].accent?.toUpperCase()}) + 쌍둥이 음운 함정
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* 오디오 재생 바 */}
+                            <div className="flex items-center gap-1.5 skeuo-inset p-1.5 bg-white/80">
+                              <button 
+                                onClick={() => playSpeech(twinQuestionsMap[item.id], `쌍둥이-${idx + 1}`)} 
+                                className={`skeuo-btn px-2.5 py-1 text-xs font-bold flex items-center gap-1 ${playingId === twinQuestionsMap[item.id].id && !isPaused ? 'skeuo-btn-teal text-white' : 'text-indigo-900'}`}
+                              >
+                                {playingId === twinQuestionsMap[item.id].id && !isPaused ? '🔊 전체 재생 중' : '▶ 쌍둥이 대본 듣기'}
+                              </button>
+                              <button 
+                                onClick={() => playSaTargetSnippet(twinQuestionsMap[item.id])} 
+                                className="skeuo-btn px-2 py-1 text-xs font-bold text-amber-700"
+                                title="빈칸 3초 집중 청취"
+                              >
+                                🔁 빈칸 3초
+                              </button>
+                              <button 
+                                onClick={stopSpeech} 
+                                disabled={playingId !== twinQuestionsMap[item.id].id} 
+                                className="skeuo-btn px-2 py-1 text-xs font-bold text-red-600 disabled:opacity-40"
+                              >
+                                ⏹
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* 문제 본문 */}
+                          <div className="space-y-3">
+                            {/* 객관식 질문 및 5지선다 OMR */}
+                            <div className="bg-white p-3.5 rounded-xl border border-indigo-100 space-y-2.5 shadow-xs">
+                              <div className="font-bold text-xs text-slate-900 flex items-start gap-1.5">
+                                <span className="bg-indigo-700 text-white px-1.5 py-0.5 rounded text-[10px] font-mono shrink-0">Q1</span>
+                                <span>{twinQuestionsMap[item.id].mcQuestion}</span>
+                              </div>
+                              <div className="grid grid-cols-1 gap-1.5 pt-1">
+                                {twinQuestionsMap[item.id].mcOptions?.map((opt, oIdx) => {
+                                  const isSelected = twinAnswersMap[item.id]?.mc === oIdx;
+                                  const isGraded = twinAnswersMap[item.id]?.isGraded;
+                                  const isAnswer = twinQuestionsMap[item.id].mcAnswerIndex === oIdx;
+
+                                  let optClass = "p-2.5 rounded-lg border text-xs text-left font-medium transition-all flex items-center justify-between ";
+                                  if (isGraded) {
+                                    if (isAnswer) optClass += "bg-emerald-50 border-emerald-400 text-emerald-950 font-bold ";
+                                    else if (isSelected) optClass += "bg-rose-50 border-rose-300 text-rose-900 line-through ";
+                                    else optClass += "bg-slate-50 border-slate-200 text-slate-500 opacity-60 ";
+                                  } else {
+                                    if (isSelected) optClass += "bg-indigo-50 border-indigo-500 text-indigo-950 font-bold ring-2 ring-indigo-400 ";
+                                    else optClass += "bg-white border-slate-200 text-slate-700 hover:bg-slate-50 ";
+                                  }
+
+                                  return (
+                                    <button
+                                      key={oIdx}
+                                      type="button"
+                                      disabled={isGraded}
+                                      onClick={() => setTwinAnswersMap(prev => ({
+                                        ...prev,
+                                        [item.id]: { ...prev[item.id], mc: oIdx }
+                                      }))}
+                                      className={optClass}
+                                    >
+                                      <span>{oIdx + 1}. {opt}</span>
+                                      {isGraded && isAnswer && <span className="text-emerald-600 font-bold text-xs">O 정답</span>}
+                                      {isGraded && isSelected && !isAnswer && <span className="text-rose-600 font-bold text-xs">X 오답</span>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* 주관식 딕테이션 빈칸 */}
+                            <div className="bg-white p-3.5 rounded-xl border border-indigo-100 space-y-2 shadow-xs">
+                              <div className="font-bold text-xs text-slate-900 flex items-start gap-1.5">
+                                <span className="bg-indigo-700 text-white px-1.5 py-0.5 rounded text-[10px] font-mono shrink-0">Q2</span>
+                                <span>주관식 빈칸 딕테이션 (음운 함정 극복)</span>
+                              </div>
+                              <p className="text-xs font-semibold text-slate-700 bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-100 font-mono">
+                                {twinQuestionsMap[item.id].saQuestion}
+                              </p>
+                              {twinQuestionsMap[item.id].saHint && (
+                                <p className="text-[11px] text-amber-800 font-medium flex items-center gap-1">
+                                  <span>💡 힌트:</span>
+                                  <span>{twinQuestionsMap[item.id].saHint}</span>
+                                </p>
+                              )}
+                              <input 
+                                type="text"
+                                disabled={twinAnswersMap[item.id]?.isGraded}
+                                placeholder="대본 속 빈칸(______)에 들어갈 영어 단어 입력"
+                                value={twinAnswersMap[item.id]?.sa || ''}
+                                onChange={(e) => setTwinAnswersMap(prev => ({
+                                  ...prev,
+                                  [item.id]: { ...prev[item.id], sa: e.target.value }
+                                }))}
+                                className="w-full p-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 shadow-inner"
+                              />
+                            </div>
+                          </div>
+
+                          {/* 채점 조작부 */}
+                          {!twinAnswersMap[item.id]?.isGraded ? (
+                            <button
+                              type="button"
+                              onClick={() => gradeTwinQuestion(item.id)}
+                              className="skeuo-btn w-full py-3 text-xs font-black bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm flex items-center justify-center gap-2"
+                            >
+                              <span>📝 쌍둥이 문제 즉시 채점하기 ➔</span>
+                            </button>
+                          ) : (
+                            <div className="space-y-3 pt-1 animate-fade-in">
+                              {/* 채점 점수 배너 */}
+                              <div className={`p-3 rounded-xl border flex items-center justify-between text-xs font-bold ${
+                                twinAnswersMap[item.id].score === 30 
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-950' 
+                                  : twinAnswersMap[item.id].score > 0 
+                                  ? 'bg-amber-50 border-amber-300 text-amber-950' 
+                                  : 'bg-rose-50 border-rose-300 text-rose-950'
+                              }`}>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-base">
+                                    {twinAnswersMap[item.id].score === 30 ? '🎉' : twinAnswersMap[item.id].score > 0 ? '💡' : '🎯'}
+                                  </span>
+                                  <span>
+                                    {twinAnswersMap[item.id].score === 30 ? '축하합니다! 오답 완벽 극복 성공 (30점 만점)' : `쌍둥이 클리닉 채점 결과: ${twinAnswersMap[item.id].score} / 30점`}
+                                  </span>
+                                </div>
+                                <span className="font-mono text-sm font-black">
+                                  +{twinAnswersMap[item.id].score}점
+                                </span>
+                              </div>
+
+                              {/* 정답 안내 */}
+                              <div className="bg-white p-3 rounded-xl border border-slate-200 text-xs space-y-1.5">
+                                <div className="flex items-center justify-between border-b border-slate-200 pb-1">
+                                  <span className="font-bold text-slate-700">📖 쌍둥이 문제 표준 정답</span>
+                                  <span className="text-[11px] font-mono text-emerald-700 font-bold">
+                                    객관식: {twinQuestionsMap[item.id].mcAnswerIndex + 1}번 / 주관식: "{twinQuestionsMap[item.id].saBlankWord}"
+                                  </span>
+                                </div>
+                                {twinAnswersMap[item.id].isSaTolerant && (
+                                  <p className="text-[11px] text-amber-800 font-medium">
+                                    ⚠️ 주관식 1글자 오타 관용 정답 인정됨 (입력: "{twinAnswersMap[item.id].sa}" ➔ 표준: "{twinQuestionsMap[item.id].saBlankWord}")
+                                  </p>
+                                )}
+                              </div>
+
+                              {/* 다시 풀기 / 재출제 버튼 */}
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => generateTwinQuestion(item)}
+                                  className="skeuo-btn flex-1 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100"
+                                >
+                                  🔄 다른 쌍둥이 문제 생성
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setTwinAnswersMap(prev => ({
+                                    ...prev,
+                                    [item.id]: { mc: null, sa: '', isGraded: false, isMcCorrect: false, isSaCorrect: false, isSaTolerant: false, score: 0 }
+                                  }))}
+                                  className="skeuo-btn flex-1 py-2 text-xs font-bold text-slate-700 border border-slate-300"
+                                >
+                                  🔁 이 문제 다시 풀기
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
