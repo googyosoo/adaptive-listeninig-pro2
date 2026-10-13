@@ -1532,6 +1532,612 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         return { bytes, chars: text.length };
       };
 
+      // [신규 고도화] 소리-철자 불일치 핀포인트 음운 규칙 분석 엔진 (Sound-Spelling Phonetic Diagnostic Engine)
+      const analyzePhoneticDiscrepancy = (word, contextSentence = '', accent = 'us') => {
+        if (!word) {
+          return {
+            hasDiscrepancy: false,
+            category: 'standard',
+            ruleName: '표준 표음 음운 (Standard Phonics)',
+            badgeText: '기본 발음',
+            badgeColor: 'teal',
+            targetWord: '',
+            soundIpa: '[-]',
+            soundKorean: '-',
+            spelledLetters: '-',
+            frequentErrorSpelling: '(없음)',
+            linguisticExplanation: '철자와 소리가 비교적 일치하는 기본 어휘입니다.',
+            clinicTip: '강세 위치에 유의하여 명확하게 발음하고 받아쓰세요.'
+          };
+        }
+
+        const cleanWord = word.toLowerCase().trim().replace(/[^a-z]/g, '');
+        const cleanContext = (contextSentence || '').toLowerCase();
+        const isUk = accent === 'uk';
+
+        // 1. 고빈도 핵심 어휘 사전 매핑 (High-Frequency Word Map)
+        const PHONETIC_DICT = {
+          // [묵음 - Silent Letter]
+          receipt: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - p 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[rɪˈsiːt]',
+            soundKorean: '리시트',
+            spelledLetters: 'receipt (p 묵음)',
+            frequentErrorSpelling: 'receit, resit, receite',
+            linguisticExplanation: "라틴어 'recipere'에서 차용되면서 철자 'p'가 유지되었으나, 고대 프랑스어와 현대 영어 구어에서는 'p'가 완전히 탈락하여 [rɪˈsiːt]로 발음됩니다.",
+            clinicTip: "귀로는 [리시트]로 명확히 들리지만 영수증을 의미할 때는 철자 속에 숨어있는 'p'를 반드시 복원하여 적어야 합니다."
+          },
+          doubt: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - b 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[daʊt]',
+            soundKorean: '다웃',
+            spelledLetters: 'doubt (b 묵음)',
+            frequentErrorSpelling: 'dout, dowt',
+            linguisticExplanation: "어미 부근의 '-bt' 연속 자음에서 조음 편의상 입술을 닫는 파열음 /b/가 탈락하고 치경 파열음 /t/만 실현됩니다.",
+            clinicTip: "'의심하다'는 뜻의 [다웃]은 d-o-u-t가 아니라 보이지 않는 'b'가 들어간 doubt입니다."
+          },
+          debt: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - b 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[dɛt]',
+            soundKorean: '뎃/뎉',
+            spelledLetters: 'debt (b 묵음)',
+            frequentErrorSpelling: 'det, dette',
+            linguisticExplanation: "라틴어 'debitum'의 철자 영향으로 'b'가 남아있으나 발음은 [det]으로 /b/가 완전히 묵음 처리됩니다.",
+            clinicTip: "빚, 부채를 뜻하는 [뎃]은 절대로 det이 아닌 debt로 써야 합니다."
+          },
+          listen: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - t 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[ˈlɪsən]',
+            soundKorean: '리슨',
+            spelledLetters: 'listen (t 묵음)',
+            frequentErrorSpelling: 'lisen, lissin',
+            linguisticExplanation: "영어 어미 '-sten', '-stle', '-ften' 군에서는 치경 마찰음 /s/ 뒤의 폐쇄음 /t/가 조음 간섭으로 인해 탈락합니다.",
+            clinicTip: "'리스튼'이 아니라 [리슨]으로 들려도 중간에 't'가 들어가는 listen입니다."
+          },
+          castle: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - t 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[ˈkæsəl]',
+            soundKorean: '캐슬',
+            spelledLetters: 'castle (t 묵음)',
+            frequentErrorSpelling: 'casle, kassle',
+            linguisticExplanation: "'-stle' 조합에서 /t/는 성도 폐쇄 없이 마찰음 /s/와 음절성 자음 /l/로 바로 연결됩니다.",
+            clinicTip: "성을 뜻하는 [캐슬]은 t가 살아있는 castle입니다."
+          },
+          fasten: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - t 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[ˈfæsən]',
+            soundKorean: '패슨',
+            spelledLetters: 'fasten (t 묵음)',
+            frequentErrorSpelling: 'fasen, fassen',
+            linguisticExplanation: "'fast'에 접미사 '-en'이 붙으면서 자음군 단순화 규칙에 의해 /t/가 묵음화됩니다.",
+            clinicTip: "안전벨트를 매다(fasten seatbelt)에서 [패슨]으로 들려도 철자는 fasten입니다."
+          },
+          island: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - s 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[ˈaɪlənd]',
+            soundKorean: '아일랜드',
+            spelledLetters: 'island (s 묵음)',
+            frequentErrorSpelling: 'iland, eiland',
+            linguisticExplanation: "고대 영어 'iegland'에 프랑스어 차용어 'isle'의 철자 관습이 혼합되어 's'가 삽입되었으나 발음되지 않습니다.",
+            clinicTip: "섬을 뜻하는 [아일랜드]는 s가 들어간 island이며, 국가 Ireland와 구별해야 합니다."
+          },
+          foreign: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - g 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[ˈfɔːrɪn]',
+            soundKorean: '포린',
+            spelledLetters: 'foreign (g 묵음)',
+            frequentErrorSpelling: 'forin, forein',
+            linguisticExplanation: "'-ign' 형태소에서 비음 /n/ 앞의 연구개 파열음 /g/는 탈락하고 앞선 모음이 장모음화되거나 약화됩니다.",
+            clinicTip: "'외국의' [포린]은 sign, design과 마찬가지로 g가 숨어있는 foreign입니다."
+          },
+          sign: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - g 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[saɪn]',
+            soundKorean: '사인',
+            spelledLetters: 'sign (g 묵음)',
+            frequentErrorSpelling: 'sine, sain',
+            linguisticExplanation: "비음 /n/ 직전의 'g' 묵음 현상으로 이중모음 [aɪ] 뒤에 /n/만 소리납니다.",
+            clinicTip: "서명하다/표지판의 [사인]은 sign입니다 (파생어 signature에서는 g가 부활하여 [시그니처]로 발음)."
+          },
+          design: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - g 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[dɪˈzaɪn]',
+            soundKorean: '디자인',
+            spelledLetters: 'design (g 묵음)',
+            frequentErrorSpelling: 'desine, desighn',
+            linguisticExplanation: "비음 /n/ 직전의 g가 묵음화되어 [디자인]으로 발음됩니다.",
+            clinicTip: "설계/디자인의 [디자인]은 철자에 g가 숨어있는 design입니다."
+          },
+          autumn: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - n 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[ˈɔːtəm]',
+            soundKorean: '오텀',
+            spelledLetters: 'autumn (n 묵음)',
+            frequentErrorSpelling: 'autum, otom',
+            linguisticExplanation: "단어 끝 '-mn' 연속 자음에서 조음 위치가 유사한 순음 /m/ 뒤의 치경 비음 /n/이 탈락합니다.",
+            clinicTip: "가을을 뜻하는 [오텀]은 n으로 끝나는 autumn입니다."
+          },
+          column: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - n 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[ˈkɑːləm]',
+            soundKorean: '칼럼',
+            spelledLetters: 'column (n 묵음)',
+            frequentErrorSpelling: 'colum, calum',
+            linguisticExplanation: "단어 끝 '-mn'에서 /n/이 탈락하여 /m/으로 종결됩니다.",
+            clinicTip: "기둥이나 신문 칼럼의 [칼럼]은 끝에 n이 붙는 column입니다."
+          },
+          half: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - l 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[hæf]',
+            soundKorean: '해프',
+            spelledLetters: 'half (l 묵음)',
+            frequentErrorSpelling: 'haf, hafe',
+            linguisticExplanation: "마찰음 /f/ 앞의 설측음 /l/은 중세 영어 이후 후설모음 뒤에서 완전히 탈락하였습니다.",
+            clinicTip: "절반의 [해프]는 l이 묵음인 half입니다."
+          },
+          calm: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - l 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[kɑːm]',
+            soundKorean: '캄',
+            spelledLetters: 'calm (l 묵음)',
+            frequentErrorSpelling: 'cam, carm',
+            linguisticExplanation: "순음 /m/ 앞의 /l/은 조음 생략되어 소리 나지 않습니다.",
+            clinicTip: "침착한 [캄]은 l이 들어간 calm입니다."
+          },
+          salmon: {
+            category: 'silent',
+            ruleName: '묵음 현상 (Silent Letter - l 묵음)',
+            badgeText: '🔇 묵음 현상',
+            badgeColor: 'rose',
+            soundIpa: '[ˈsæmən]',
+            soundKorean: '새먼',
+            spelledLetters: 'salmon (l 묵음)',
+            frequentErrorSpelling: 'samon, salman',
+            linguisticExplanation: "'살몬'이 아니라 /l/이 묵음화되어 [새먼]으로 발음됩니다.",
+            clinicTip: "연어를 뜻하는 [새먼]은 l이 묵음인 salmon입니다."
+          },
+
+          // [플랩 현상 - Flap T/D]
+          water: {
+            category: 'flap',
+            ruleName: '플랩 현상 (Flapping - 탄설음 [ɾ])',
+            badgeText: '🌊 플랩-T 현상',
+            badgeColor: 'blue',
+            soundIpa: isUk ? '[ˈwɔːtər]' : '[ˈwɑːɾər]',
+            soundKorean: isUk ? '워터' : '워러',
+            spelledLetters: 'water (모음 사이 t ➔ [ɾ])',
+            frequentErrorSpelling: 'waler, warer',
+            linguisticExplanation: "미국식 영어에서 강세 모음과 비강세 모음 사이의 치경 파열음 /t/는 혀끝을 치경에 가볍게 튕기는 유성 탄설음 [ɾ]('ㄹ' 소리)로 약화됩니다.",
+            clinicTip: "미국인 성우는 [워러]로 빠르게 발음하므로 'waler'나 'warer'로 쓰지 말고 표준 철자 water를 떠올려야 합니다."
+          },
+          better: {
+            category: 'flap',
+            ruleName: '플랩 현상 (Flapping - 탄설음 [ɾ])',
+            badgeText: '🌊 플랩-T 현상',
+            badgeColor: 'blue',
+            soundIpa: isUk ? '[ˈbɛtər]' : '[ˈbɛɾər]',
+            soundKorean: isUk ? '베터' : '베러',
+            spelledLetters: 'better (tt ➔ [ɾ])',
+            frequentErrorSpelling: 'berer, beler',
+            linguisticExplanation: "이중 자음 'tt'가 모음 사이에서 단일 탄설음 [ɾ]로 부드럽게 약화됩니다.",
+            clinicTip: "[베러]로 들려도 더 나은 상태를 뜻할 때는 better입니다."
+          },
+          city: {
+            category: 'flap',
+            ruleName: '플랩 현상 (Flapping - 탄설음 [ɾ])',
+            badgeText: '🌊 플랩-T 현상',
+            badgeColor: 'blue',
+            soundIpa: isUk ? '[ˈsɪti]' : '[ˈsɪɾi]',
+            soundKorean: isUk ? '시티' : '시리',
+            spelledLetters: 'city (t ➔ [ɾ])',
+            frequentErrorSpelling: 'siri, sity',
+            linguisticExplanation: "모음 사이 /t/가 유성화되어 우리말의 유음 'ㄹ'과 매우 흡사하게 소리납니다.",
+            clinicTip: "[시리]로 들려도 인공지능 Siri가 아니라 도시를 뜻하는 city입니다."
+          },
+          writer: {
+            category: 'flap',
+            ruleName: '플랩 현상 및 w 묵음 (Flapping & Silent w)',
+            badgeText: '🌊 플랩 & 묵음',
+            badgeColor: 'blue',
+            soundIpa: isUk ? '[ˈraɪtər]' : '[ˈraɪɾər]',
+            soundKorean: isUk ? '라이터' : '라이러',
+            spelledLetters: 'writer (w 묵음 + t 플랩)',
+            frequentErrorSpelling: 'rider, righter',
+            linguisticExplanation: "'wr'에서 w는 묵음이며 모음 사이 t는 플랩 현상으로 [ɾ]가 되어 'rider(승마자)'와 거의 동음이의어처럼 들립니다.",
+            clinicTip: "문맥상 작가/글쓴이일 때는 rider가 아닌 writer입니다."
+          },
+          hospital: {
+            category: 'flap',
+            ruleName: '플랩 현상 (Flapping - 탄설음 [ɾ])',
+            badgeText: '🌊 플랩-T 현상',
+            badgeColor: 'blue',
+            soundIpa: isUk ? '[ˈhɒspɪtəl]' : '[ˈhɑːspɪɾəl]',
+            soundKorean: isUk ? '호스피탈' : '하스피를',
+            spelledLetters: 'hospital (t ➔ [ɾ])',
+            frequentErrorSpelling: 'hospiral, hospitle',
+            linguisticExplanation: "모음 사이의 t가 플랩화되고 뒤따르는 비강세 모음이 슈와([ə])로 약화되어 [하스피를]로 들립니다.",
+            clinicTip: "[하스피를]로 뭉개져 들려도 철자는 hospital입니다."
+          },
+          party: {
+            category: 'flap',
+            ruleName: '플랩 현상 (Flapping - 탄설음 [ɾ])',
+            badgeText: '🌊 플랩-T 현상',
+            badgeColor: 'blue',
+            soundIpa: isUk ? '[ˈpɑːti]' : '[ˈpɑːrɾi]',
+            soundKorean: isUk ? '파티' : '파리',
+            spelledLetters: 'party (t ➔ [ɾ])',
+            frequentErrorSpelling: 'pari, pary',
+            linguisticExplanation: "모음화된 r 뒤의 t가 플랩되어 프랑스 파리(Paris)와 유사하게 [파리]로 들립니다.",
+            clinicTip: "즐기는 모임의 [파리]는 party입니다."
+          },
+
+          // [슈와 모음 약화 & 탈락 - Schwa [ə] & Syncope]
+          comfortable: {
+            category: 'schwa',
+            ruleName: '모음 탈락 및 슈와 약화 (Syncope & Schwa [ə])',
+            badgeText: '🌬️ 슈와 모음약화',
+            badgeColor: 'purple',
+            soundIpa: '[ˈkʌmftərbəl]',
+            soundKorean: '컴프터블',
+            spelledLetters: 'comfortable (or 음절 탈락)',
+            frequentErrorSpelling: 'comfitable, comfutable, comfetable',
+            linguisticExplanation: "4음절 'com-for-ta-ble'로 발음되지 않고, 강세 바로 뒤의 모음 'or'가 음절 간 탈락(Syncope)을 일으켜 3음절 [컴프-터-블]로 축약됩니다.",
+            clinicTip: "귀로는 [컴프터블]로 짧게 들리지만 'comfort'라는 기본형에 '-able'이 결합된 철자를 기억해야 합니다."
+          },
+          chocolate: {
+            category: 'schwa',
+            ruleName: '모음 탈락 (Syncope - 음절 소실)',
+            badgeText: '🌬️ 슈와 모음약화',
+            badgeColor: 'purple',
+            soundIpa: '[ˈtʃɑːklət]',
+            soundKorean: '초클릿',
+            spelledLetters: 'chocolate (중간 o 탈락)',
+            frequentErrorSpelling: 'choclet, choclate',
+            linguisticExplanation: "중간 음절의 'o'가 완전히 소실되어 2음절 [초-클릿]으로 발음됩니다.",
+            clinicTip: "'초콜릿'이 아니라 [초클릿]으로 들려도 철자는 chocolate 9글자입니다."
+          },
+          vegetable: {
+            category: 'schwa',
+            ruleName: '모음 탈락 (Syncope - e 탈락)',
+            badgeText: '🌬️ 슈와 모음약화',
+            badgeColor: 'purple',
+            soundIpa: '[ˈvɛdʒtəbəl]',
+            soundKorean: '베치터블/베지터블',
+            spelledLetters: 'vegetable (중간 e 탈락)',
+            frequentErrorSpelling: 'vegtable, vegitible',
+            linguisticExplanation: "두 번째 음절 'e'가 탈락하여 [베-지-터-블] 3음절로 발음됩니다.",
+            clinicTip: "채소를 뜻하는 [베치터블]은 4음절 철자 vegetable로 표기합니다."
+          },
+          separate: {
+            category: 'schwa',
+            ruleName: '슈와 약화 (Schwa [ə] Reduction)',
+            badgeText: '🌬️ 슈와 모음약화',
+            badgeColor: 'purple',
+            soundIpa: '[ˈsɛprət]',
+            soundKorean: '세프럿',
+            spelledLetters: 'separate (a ➔ [ə] / 탈락)',
+            frequentErrorSpelling: 'seperate, seprate',
+            linguisticExplanation: "중간 모음 'a'가 약화되어 거의 들리지 않거나 극단적 단모음 [ə]로 축약됩니다. 한국 학생 오답률 1위 철자(seperate) 함정입니다.",
+            clinicTip: "'e'가 아니라 중간에 'a'가 들어간 sep-a-rate를 암기해야 합니다."
+          },
+          temperature: {
+            category: 'schwa',
+            ruleName: '모음 탈락 및 구개음화 (Syncope & Palatalization)',
+            badgeText: '🌬️ 모음탈락 & 구개음',
+            badgeColor: 'purple',
+            soundIpa: '[ˈtɛmprətʃər]',
+            soundKorean: '템프러쳐',
+            spelledLetters: 'temperature (era ➔ [rə])',
+            frequentErrorSpelling: 'temprature, temperture',
+            linguisticExplanation: "중간의 'era' 부분이 압축되어 [템프러쳐] 4음절/3음절로 빠르게 넘어갑니다.",
+            clinicTip: "온도를 뜻하는 [템프러쳐]는 철자가 길지만 temperature입니다."
+          },
+          restaurant: {
+            category: 'schwa',
+            ruleName: '모음 탈락 및 프랑스어 차용',
+            badgeText: '🌬️ 모음탈락 & 차용어',
+            badgeColor: 'purple',
+            soundIpa: '[ˈrɛstrɑːnt]',
+            soundKorean: '레스트런트',
+            spelledLetters: 'restaurant (au ➔ [ə])',
+            frequentErrorSpelling: 'resturant, resterant',
+            linguisticExplanation: "'au' 모음이 약화되어 [레스트런트]로 빠르게 조음됩니다.",
+            clinicTip: "식당은 rest-au-rant 구조를 머릿속에 각인해야 합니다."
+          },
+
+          // [자음 동화 & 파열음 탈락 - Assimilation & Elision]
+          handbag: {
+            category: 'elision',
+            ruleName: '자음 동화 (Assimilation - 순음화 [m])',
+            badgeText: '🔄 자음 동화',
+            badgeColor: 'amber',
+            soundIpa: '[ˈhæmbæɡ]',
+            soundKorean: '햄백',
+            spelledLetters: 'handbag (d 탈락 + n➔m)',
+            frequentErrorSpelling: 'hambag, hanbag',
+            linguisticExplanation: "뒤따르는 양순음 /b/의 영향을 받아 앞선 치경 비음 /n/이 순음 /m/으로 동화되고 폐쇄음 /d/는 탈락합니다.",
+            clinicTip: "[햄백]으로 들려도 손(hand) + 가방(bag)이 결합된 handbag입니다."
+          },
+          sandwich: {
+            category: 'elision',
+            ruleName: '파열음 탈락 (Elision - d 탈락)',
+            badgeText: '✂️ 자음 탈락',
+            badgeColor: 'amber',
+            soundIpa: '[ˈsænwɪtʃ]',
+            soundKorean: '샌위치',
+            spelledLetters: 'sandwich (d 묵음/탈락)',
+            frequentErrorSpelling: 'sanwich, senwich',
+            linguisticExplanation: "연속 자음군 n-d-w 사이에서 중앙 폐쇄음 /d/가 완전히 탈락합니다.",
+            clinicTip: "[새니위치/샌위치]로 들려도 철자에는 반드시 'd'가 포함된 sandwich입니다."
+          },
+          grandma: {
+            category: 'elision',
+            ruleName: '파열음 탈락 (Elision - d 탈락)',
+            badgeText: '✂️ 자음 탈락',
+            badgeColor: 'amber',
+            soundIpa: '[ˈɡrænmɑː]',
+            soundKorean: '그랜마',
+            spelledLetters: 'grandma (d 탈락)',
+            frequentErrorSpelling: 'granma',
+            linguisticExplanation: "비음 /m/ 앞의 파열음 /d/가 조음되지 않고 탈락합니다.",
+            clinicTip: "할머니는 grand + ma = grandma입니다."
+          }
+        };
+
+        // 2. 사전 직접 매칭
+        if (PHONETIC_DICT[cleanWord]) {
+          return {
+            hasDiscrepancy: true,
+            targetWord: word,
+            ...PHONETIC_DICT[cleanWord]
+          };
+        }
+
+        // 3. 정규식 및 음운 패턴 동적 진단 (Dynamic Phonetic Pattern Detector)
+        // (1) k 묵음 (kn...)
+        if (/^kn[aeiou]/.test(cleanWord)) {
+          return {
+            hasDiscrepancy: true,
+            category: 'silent',
+            ruleName: '어두 자음군 단순화 (k 묵음 - Silent k)',
+            badgeText: '🔇 k 묵음 현상',
+            badgeColor: 'rose',
+            targetWord: word,
+            soundIpa: `[n...]`,
+            soundKorean: `'k' 소리 없음 (n으로 시작)`,
+            spelledLetters: `${word} (k 묵음)`,
+            frequentErrorSpelling: cleanWord.replace(/^kn/, 'n'),
+            linguisticExplanation: "게르만어 계열 단어에서 어두 'kn-'은 중세 이후 /k/ 조음이 탈락하여 비음 /n/으로만 시작됩니다.",
+            clinicTip: "[n]으로 소리가 시작되더라도 칼(knife), 무릎(knee), 알다(know), 기사(knight) 등은 k를 붙여 적어야 합니다."
+          };
+        }
+
+        // (2) w 묵음 (wr...)
+        if (/^wr[aeiou]/.test(cleanWord)) {
+          return {
+            hasDiscrepancy: true,
+            category: 'silent',
+            ruleName: '어두 자음군 단순화 (w 묵음 - Silent w)',
+            badgeText: '🔇 w 묵음 현상',
+            badgeColor: 'rose',
+            targetWord: word,
+            soundIpa: `[r...]`,
+            soundKorean: `'w' 소리 없음 (r로 시작)`,
+            spelledLetters: `${word} (w 묵음)`,
+            frequentErrorSpelling: cleanWord.replace(/^wr/, 'r'),
+            linguisticExplanation: "어두 'wr-' 조합에서 입술을 둥글게 모으는 반모음 /w/가 소실되어 권설음 /r/만 발음됩니다.",
+            clinicTip: "쓰다(write), 틀린(wrong), 손목(wrist) 등은 [r]로 들려도 w-r로 시작합니다."
+          };
+        }
+
+        // (3) b 묵음 (-mb, -bt)
+        if (/mb$|bt$/.test(cleanWord)) {
+          return {
+            hasDiscrepancy: true,
+            category: 'silent',
+            ruleName: '어말 자음군 탈락 (b 묵음 - Silent b)',
+            badgeText: '🔇 b 묵음 현상',
+            badgeColor: 'rose',
+            targetWord: word,
+            soundIpa: cleanWord.endsWith('mb') ? `[...m]` : `[...t]`,
+            soundKorean: `'b' 소리 없이 끝남`,
+            spelledLetters: `${word} (끝 b 묵음)`,
+            frequentErrorSpelling: cleanWord.replace(/b$/, ''),
+            linguisticExplanation: "단어 끝 '-mb'(climb, bomb, lamb, thumb) 또는 '-bt'(doubt, debt)에서 파열음 /b/는 묵음 처리됩니다.",
+            clinicTip: "끝소리가 [m]이나 [t]로 끝나더라도 climb, doubt처럼 철자 b를 빠뜨리지 마세요."
+          };
+        }
+
+        // (4) g 묵음 (-gn)
+        if (/gn/.test(cleanWord)) {
+          return {
+            hasDiscrepancy: true,
+            category: 'silent',
+            ruleName: '비음 앞 연구개음 탈락 (g 묵음 - Silent g)',
+            badgeText: '🔇 g 묵음 현상',
+            badgeColor: 'rose',
+            targetWord: word,
+            soundIpa: `[...aɪn / ...ɪn]`,
+            soundKorean: `'g' 소리 탈락`,
+            spelledLetters: `${word} (g 묵음)`,
+            frequentErrorSpelling: cleanWord.replace(/gn/, 'n'),
+            linguisticExplanation: "비음 /n/과 결합된 연구개 폐쇄음 /g/가 구강 조음 생략되어 발음되지 않습니다.",
+            clinicTip: "sign, design, foreign, assign 등은 g가 들어간다는 점을 반드시 기억하세요."
+          };
+        }
+
+        // (5) t 묵음 (-sten, -stle, -ften)
+        if (/sten|stle|ften/.test(cleanWord)) {
+          return {
+            hasDiscrepancy: true,
+            category: 'silent',
+            ruleName: '치경 마찰음 뒤 파열음 탈락 (t 묵음)',
+            badgeText: '🔇 t 묵음 현상',
+            badgeColor: 'rose',
+            targetWord: word,
+            soundIpa: `[...sən / ...səl]`,
+            soundKorean: `'t' 소리 탈락`,
+            spelledLetters: `${word} (t 묵음)`,
+            frequentErrorSpelling: cleanWord.replace(/t/, ''),
+            linguisticExplanation: "마찰음 /s/와 비음/설측음 사이에서 치경 폐쇄음 /t/는 성도를 완전히 막지 못하고 탈락합니다.",
+            clinicTip: "listen, castle, often 등은 t가 소리 나지 않지만 철자에는 반드시 존재합니다."
+          };
+        }
+
+        // (6) gh 묵음 (-ight, -ough, -augh)
+        if (/[aeiou]gh[t]?/.test(cleanWord) && !cleanWord.startsWith('gh')) {
+          return {
+            hasDiscrepancy: true,
+            category: 'silent',
+            ruleName: '역사적 유성 마찰음 소실 (gh 묵음 / f 변형)',
+            badgeText: '🔇 gh 묵음 현상',
+            badgeColor: 'rose',
+            targetWord: word,
+            soundIpa: cleanWord.includes('ight') ? '[aɪt]' : '[...]',
+            soundKorean: `'gh' 소리 탈락`,
+            spelledLetters: `${word} (gh 묵음)`,
+            frequentErrorSpelling: cleanWord.replace(/gh/, ''),
+            linguisticExplanation: "고대 영어의 연구개 마찰음 [x]가 근대 영어로 오면서 완전히 묵음화되거나 모음을 장모음화시켰습니다.",
+            clinicTip: "night, light, thought, through 등은 gh가 묵음으로 남아있습니다."
+          };
+        }
+
+        // (7) 모음 사이 t/tt/d (미국식 플랩-T 현상)
+        if (!isUk && /[aeiou](t|tt|d)[aeiou]/.test(cleanWord) && cleanWord.length >= 4) {
+          return {
+            hasDiscrepancy: true,
+            category: 'flap',
+            ruleName: '모음 간 유성 탄설음화 (Flap T/D [ɾ])',
+            badgeText: '🌊 플랩-T 현상',
+            badgeColor: 'blue',
+            targetWord: word,
+            soundIpa: `[...ɾ...]`,
+            soundKorean: `부드러운 'ㄹ' 소리로 약화`,
+            spelledLetters: `${word} (t/d ➔ [ɾ])`,
+            frequentErrorSpelling: cleanWord.replace(/t|tt/, 'r'),
+            linguisticExplanation: "미국 영어에서 강세 모음 뒤 비강세 모음 사이의 /t/, /d/는 혀끝이 잇몸을 스치며 탄설음 [ɾ]('ㄹ')로 발음됩니다.",
+            clinicTip: "귀에 'ㄹ' 소리가 들리더라도 단어의 철자는 t나 d로 적어야 합니다."
+          };
+        }
+
+        // (8) 문맥 문장 내 구개음화 (Palatalization: t/d + you)
+        if (cleanContext.includes(`${cleanWord} you`) || cleanContext.includes(`${cleanWord} your`)) {
+          return {
+            hasDiscrepancy: true,
+            category: 'palatalization',
+            ruleName: '구개음화 현상 (Palatalization - t/d + y)',
+            badgeText: '👅 구개음화 현상',
+            badgeColor: 'amber',
+            targetWord: word,
+            soundIpa: cleanWord.endsWith('t') ? `[...tʃuː]` : `[...dʒuː]`,
+            soundKorean: cleanWord.endsWith('t') ? `'~츄'` : `'~쥬'`,
+            spelledLetters: `${word} + you`,
+            frequentErrorSpelling: cleanWord.endsWith('t') ? `${cleanWord}chu` : `${cleanWord}ju`,
+            linguisticExplanation: "앞 단어 끝의 치경음 /t/, /d/가 뒤 단어의 반모음 /j/와 결합하여 입천장소리 [tʃ], [dʒ]로 음화됩니다.",
+            clinicTip: "[미츄](meet you), [디쥬](did you)처럼 들려도 앞 단어와 you를 분리하여 정확한 철자를 적어야 합니다."
+          };
+        }
+
+        // (9) 문맥 문장 내 자음-모음 연음 (Linking / Liaison)
+        const wordsInSentence = cleanContext.split(/\s+/);
+        const wordIdx = wordsInSentence.indexOf(cleanWord);
+        if (wordIdx !== -1 && wordIdx < wordsInSentence.length - 1) {
+          const nextWord = wordsInSentence[wordIdx + 1];
+          if (/^[aeiou]/.test(nextWord) && /[^aeiou]$/.test(cleanWord)) {
+            return {
+              hasDiscrepancy: true,
+              category: 'linking',
+              ruleName: '자음-모음 연음 현상 (Consonant-Vowel Liaison)',
+              badgeText: '🔗 연음(Liaison)',
+              badgeColor: 'teal',
+              targetWord: word,
+              soundIpa: `[...${cleanWord.slice(-1)}.${nextWord}...]`,
+              soundKorean: `한 단어처럼 이어져 발음`,
+              spelledLetters: `${word} + ${nextWord}`,
+              frequentErrorSpelling: `${cleanWord}${nextWord}`,
+              linguisticExplanation: "앞 단어의 받침 자음이 뒤 단어의 첫 모음 자리로 이동하여 한 호흡에 발음되는 음운 연결 현상입니다.",
+              clinicTip: "두 단어가 마치 하나의 긴 단어처럼 들리므로, 음절 경계를 분리하여 독립된 단어로 철자를 적어야 합니다."
+            };
+          }
+        }
+
+        // (10) 다음절 단어의 슈와 모음 약화 기본 판정 (-tion, -able, -ate, -ment 등)
+        if (cleanWord.length >= 6 && /(able|tion|sion|ment|ture|ous)$/.test(cleanWord)) {
+          return {
+            hasDiscrepancy: true,
+            category: 'schwa',
+            ruleName: '비강세 접미사 모음 약화 (Schwa [ə] Reduction)',
+            badgeText: '🌬️ 슈와 모음약화',
+            badgeColor: 'purple',
+            targetWord: word,
+            soundIpa: `[...ə...]`,
+            soundKorean: `약하고 중립적인 [ə] 소리`,
+            spelledLetters: `${word} (비강세 모음 약화)`,
+            frequentErrorSpelling: cleanWord.replace(/a|e|i|o|u/, 'e'),
+            linguisticExplanation: "강세가 없는 접미사 음절의 모음은 입을 거의 벌리지 않는 중립 모음 [ə]로 약화되어 철자 구별이 모호해집니다.",
+            clinicTip: "소리만 들으면 '어/으'처럼 애매하게 들리므로 단어의 어원적 접미사(-able, -tion, -ment) 철자를 정확히 숙지해야 합니다."
+          };
+        }
+
+        // 기본 매칭 (표준 표음)
+        return {
+          hasDiscrepancy: false,
+          category: 'standard',
+          ruleName: '표준 표음 규칙 (Standard Phonics)',
+          badgeText: '기본 발음',
+          badgeColor: 'teal',
+          targetWord: word,
+          soundIpa: `[${cleanWord}]`,
+          soundKorean: `${cleanWord}`,
+          spelledLetters: word,
+          frequentErrorSpelling: '(없음)',
+          linguisticExplanation: '철자와 소리가 대체로 일치하는 기본 음운 체계를 따릅니다.',
+          clinicTip: '모음의 장단과 강세(Accent) 위치를 확인하며 정확한 철자로 복습하세요.'
+        };
+      };
+
       // Exam Bank 사전 기출 세트 즉시 로드 (로딩 지연 0초)
       const loadExamPreset = (presetKey) => {
         const preset = EXAM_BANK_PRESETS[presetKey];
@@ -2142,12 +2748,16 @@ ${spokenText}
         const maxScore = testData.length * 30;
 
         const detailedStats = detailed.map((d, index) => {
+          const pData = analyzePhoneticDiscrepancy(d.saBlankWord, d.saQuestion, d.accent);
+          const phoneticReport = pData.hasDiscrepancy
+            ? `\n- 소리-철자 음운 규칙: [${pData.ruleName}] 들리는 소리: ${pData.soundIpa}(${pData.soundKorean}) vs 실제 철자: ${pData.spelledLetters} (주의 함정: ${pData.frequentErrorSpelling})`
+            : '';
           const saReport = d.isExactSaCorrect
             ? '정답 (완벽 일치)'
             : d.isSaTolerant
             ? `정답 인정 (1글자 오타 관용 판정: 학생 입력 "${d.userSa}", 표준 정답 "${d.saBlankWord}") - 사소한 철자 오타를 주의하도록 격려할 것`
             : `오답 (학생 입력: "${d.userSa || '(미입력)'}", 실제 정답: "${d.saBlankWord}")`;
-          return `문항 ${index + 1}:\n- [${d.accent.toUpperCase()} 엑센트] 주제: ${d.topicCategory}, 유형: ${d.questionCategory}\n- 객관식: ${d.isMcCorrect ? '정답' : `오답 (학생 선택: ${d.userMc !== undefined ? d.mcOptions[d.userMc] : '미선택'}, 실제 정답: ${d.mcOptions[d.mcAnswerIndex]})`}\n- 주관식(딕테이션): ${saReport}`;
+          return `문항 ${index + 1}:\n- [${d.accent.toUpperCase()} 엑센트] 주제: ${d.topicCategory}, 유형: ${d.questionCategory}\n- 객관식: ${d.isMcCorrect ? '정답' : `오답 (학생 선택: ${d.userMc !== undefined ? d.mcOptions[d.userMc] : '미선택'}, 실제 정답: ${d.mcOptions[d.mcAnswerIndex]})`}\n- 주관식(딕테이션): ${saReport}${phoneticReport}`;
         }).join('\n\n');
 
         const studentGradeNum = parseInt(studentInfo.schoolGrade, 10);
@@ -4034,6 +4644,109 @@ ${feedbackList.slice(-3).join('\n')}
                           </div>
                         </div>
                       )}
+
+                      {/* [신규 고도화] 소리-철자 불일치 핀포인트 음운 규칙 해설 덱 */}
+                      {(() => {
+                        const phoneticData = analyzePhoneticDiscrepancy(item.saBlankWord, item.saQuestion || item.transcript, item.accent);
+                        const isBorderColor = phoneticData.badgeColor === 'rose' 
+                          ? 'border-rose-300 bg-rose-50/70' 
+                          : phoneticData.badgeColor === 'blue' 
+                          ? 'border-blue-300 bg-blue-50/70' 
+                          : phoneticData.badgeColor === 'purple' 
+                          ? 'border-purple-300 bg-purple-50/70' 
+                          : phoneticData.badgeColor === 'amber' 
+                          ? 'border-amber-300 bg-amber-50/70' 
+                          : 'border-teal-300 bg-teal-50/70';
+                        
+                        const badgeBg = phoneticData.badgeColor === 'rose' 
+                          ? 'bg-rose-600' 
+                          : phoneticData.badgeColor === 'blue' 
+                          ? 'bg-blue-600' 
+                          : phoneticData.badgeColor === 'purple' 
+                          ? 'bg-purple-600' 
+                          : phoneticData.badgeColor === 'amber' 
+                          ? 'bg-amber-600' 
+                          : 'bg-teal-600';
+
+                        return (
+                          <div className={`print-phonetic-clinic rounded-xl border p-4 space-y-3 shadow-xs animate-fade-in ${isBorderColor}`}>
+                            {/* 헤더 바 */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-300/80 pb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-base animate-pulse">⚡</span>
+                                <h4 className="font-black text-xs text-slate-800 tracking-wide flex items-center gap-1.5">
+                                  <span>소리-철자 불일치 핀포인트 음운 클리닉</span>
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full text-white font-mono ${badgeBg}`}>
+                                    {phoneticData.badgeText}
+                                  </span>
+                                </h4>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-mono text-slate-500 hidden sm:inline">
+                                  기준 엑센트: {item.accent === 'uk' ? '🇬🇧 영국식' : '🇺🇸 미국식'}
+                                </span>
+                                <button 
+                                  onClick={() => playSaTargetSnippet(item)} 
+                                  className="skeuo-btn px-2.5 py-1 text-xs font-bold flex items-center gap-1 text-slate-800 bg-white hover:bg-slate-100 border border-slate-300 no-print"
+                                  title="이 음운 현상이 일어난 실제 발화 구간만 3초 핀포인트로 다시 듣습니다."
+                                >
+                                  <span>🔁 해당 발화 3초 재생</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* 3대 비교 분석 계기판 (들리는 소리 vs 실제 철자 vs 주의할 오답 함정) */}
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                              <div className="bg-white/95 p-2.5 rounded-lg border border-slate-200 shadow-xs">
+                                <span className="text-[10px] font-bold text-slate-500 block mb-0.5 font-mono">
+                                  👂 귀에 들리는 음향 (Acoustic)
+                                </span>
+                                <div className="font-mono text-xs font-bold text-teal-800 flex items-baseline gap-1">
+                                  <span>{phoneticData.soundIpa}</span>
+                                  <span className="text-slate-600 font-sans font-medium text-[11px]">({phoneticData.soundKorean})</span>
+                                </div>
+                              </div>
+                              <div className="bg-white/95 p-2.5 rounded-lg border border-slate-200 shadow-xs">
+                                <span className="text-[10px] font-bold text-slate-500 block mb-0.5 font-mono">
+                                  ✍️ 올바른 표준 철자 (Spelling)
+                                </span>
+                                <div className="font-mono text-xs font-bold text-emerald-700">
+                                  {phoneticData.spelledLetters}
+                                </div>
+                              </div>
+                              <div className="bg-white/95 p-2.5 rounded-lg border border-slate-200 shadow-xs">
+                                <span className="text-[10px] font-bold text-slate-500 block mb-0.5 font-mono">
+                                  ⚠️ 주의할 오답 표기 (Trap)
+                                </span>
+                                <div className="font-mono text-xs font-bold text-rose-600">
+                                  {phoneticData.frequentErrorSpelling}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* 학술적 음운 규칙 원리 설명 */}
+                            <div className="text-xs text-slate-800 leading-relaxed bg-white/80 p-3 rounded-lg border border-slate-200">
+                              <div className="font-bold text-slate-900 mb-1 flex items-center gap-1.5">
+                                <span className="text-teal-700">📖</span>
+                                <span>음운 원리:</span>
+                                <span className="text-slate-800 font-semibold">{phoneticData.ruleName}</span>
+                              </div>
+                              <p className="text-[11px] text-slate-700 font-normal leading-normal">
+                                {phoneticData.linguisticExplanation}
+                              </p>
+                            </div>
+
+                            {/* 실전 청취 팁 */}
+                            <div className="text-[11px] font-medium text-slate-800 bg-amber-100/70 border border-amber-300 p-2.5 rounded-lg flex items-start gap-2">
+                              <span className="text-xs shrink-0 mt-0.5">💡</span>
+                              <div>
+                                <strong className="text-amber-900">[실전 청취 & 딕테이션 꿀팁] </strong>
+                                <span className="text-slate-800">{phoneticData.clinicTip}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* 결과 모드 실시간 화자 LCD 표시 */}
                       {playingId === item.id && activeSpeakerIndicator && (
