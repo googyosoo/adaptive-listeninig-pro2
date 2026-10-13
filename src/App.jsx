@@ -8,6 +8,7 @@ import {
   DEFAULT_SECURE_GEMINI,
   DEFAULT_SECURE_GOOGLE_CLIENT_ID
 } from './constants/examPresets';
+import { OFFICIAL_EXAM_LIBRARY } from './data/examLibrary';
 import { 
   VOICE_REGIONAL_PROFILES, 
   GOOGLE_AI_VOICES 
@@ -97,7 +98,9 @@ import { RadarChartWidget } from './components/RadarChartWidget';
       // Audio/TTS 상태 (2단계 고도화)
       const [playingId, setPlayingId] = useState(null);
       const [playingStage, setPlayingStage] = useState(null); // null | 'narration' | 'chime' | 'body'
-      const [examBankTab, setExamBankTab] = useState('preset'); // 'preset' | 'ai' | 'theme'
+      const [examBankTab, setExamBankTab] = useState('library'); // 'library' | 'preset' | 'ai'
+      const [libraryGradeFilter, setLibraryGradeFilter] = useState('all'); // 'all' | 1 | 2 | 3
+      const [libraryOrgFilter, setLibraryOrgFilter] = useState('all'); // 'all' | 'sido' | 'eval' | 'csat'
       const sequenceCancelledRef = useRef(false);
       const activeSessionIdRef = useRef(0); // 발화 세션 고유 ID (새 발화 시 이전 발화 100% 즉시 차단)
       const [isPaused, setIsPaused] = useState(false);
@@ -2451,6 +2454,22 @@ ${originalItem.transcript}
         }
       };
 
+      // 🏛️ 공인 기출 문제은행 라이브러리 세트 즉시 로드 (로딩 지연 0초)
+      const loadOfficialExam = (examId) => {
+        const targetExam = OFFICIAL_EXAM_LIBRARY.find(e => e.id === examId);
+        if (!targetExam) return;
+        stopSpeech();
+        setGrade(targetExam.grade);
+        setTestData(targetExam.items.map((it, idx) => ({ ...it, id: Date.now() + idx })));
+        setAnswers({});
+        setHintLevels({});
+        setHasSubmitted(false);
+        setPlayCountMap({});
+        setExamTimer(targetExam.items.length * 120);
+        setExamState('taking');
+        showToast(`🏛️ '${targetExam.shortTitle || targetExam.title}' 실전 평가를 시작합니다!`, 'success');
+      };
+
       // Exam Bank 사전 기출 세트 즉시 로드 (로딩 지연 0초)
       const loadExamPreset = (presetKey) => {
         const preset = EXAM_BANK_PRESETS[presetKey];
@@ -4392,22 +4411,150 @@ ${feedbackList.slice(-3).join('\n')}
                   </div>
                 </div>
 
-                {/* 출제 모드 선택 (물리적 토글 스위치 형태) */}
+                {/* 출제 모드 선택 (물리적 토글 스위치 형태 - 3단) */}
                 <div className="pt-2 space-y-4">
-                  <div className="skeuo-inset p-1.5 flex gap-1.5 max-w-md mx-auto">
+                  <div className="skeuo-inset p-1.5 flex gap-1.5 max-w-xl mx-auto">
+                    <button 
+                      onClick={() => setExamBankTab('library')} 
+                      className={`flex-1 py-2 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 ${examBankTab === 'library' ? 'skeuo-btn bg-white text-indigo-900 shadow-sm border border-indigo-200' : 'text-slate-500 hover:text-slate-800'}`}>
+                      <span className={`skeuo-led ${examBankTab === 'library' ? 'led-green-on' : ''}`}></span>
+                      <span>🏛️ 공인 기출 라이브러리</span>
+                    </button>
                     <button 
                       onClick={() => setExamBankTab('preset')} 
                       className={`flex-1 py-2 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 ${examBankTab === 'preset' ? 'skeuo-btn bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
-                      <span className="skeuo-led led-green-on"></span>
-                      <span>⚡ 즉시 응시 기출 (지연 0초)</span>
+                      <span className={`skeuo-led ${examBankTab === 'preset' ? 'led-green-on' : ''}`}></span>
+                      <span>⚡ 퀵 모의평가</span>
                     </button>
                     <button 
                       onClick={() => setExamBankTab('ai')} 
                       className={`flex-1 py-2 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 ${examBankTab === 'ai' ? 'skeuo-btn bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
-                      <span className="skeuo-led led-amber-on"></span>
-                      <span>🤖 AI 실시간 맞춤 출제</span>
+                      <span className={`skeuo-led ${examBankTab === 'ai' ? 'led-amber-on' : ''}`}></span>
+                      <span>🤖 AI 맞춤 출제</span>
                     </button>
                   </div>
+
+                  {/* 🏛️ 공인 기출 라이브러리 브라우저 */}
+                  {examBankTab === 'library' && (
+                    <div className="space-y-4 animate-fade-in text-left">
+                      <div className="bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-slate-50 p-3.5 rounded-xl border border-indigo-100/80 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-base">🏛️</span>
+                            <h4 className="text-sm font-black text-slate-800">전국 시·도교육청 & 한국교육과정평가원 공인 기출 아카이브</h4>
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-600 text-white">EBS 연계 100%</span>
+                          </div>
+                          <p className="text-xs text-slate-600 mt-1">
+                            전국 16개 시·도교육청 영어듣기능력평가(1·2회) 및 평가원 수능·모평 정규 기출을 네트워크 트래픽/API 비용 0원으로 0.1초 만에 즉시 풀이할 수 있습니다.
+                          </p>
+                        </div>
+
+                        {/* 필터 바 */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* 학년 필터 */}
+                          <div className="flex items-center bg-white p-1 rounded-lg border border-slate-200 text-xs shadow-2xs">
+                            <span className="text-[11px] font-bold text-slate-400 px-1.5">학년:</span>
+                            {[
+                              { label: '전체', val: 'all' },
+                              { label: '고1', val: 1 },
+                              { label: '고2', val: 2 },
+                              { label: '고3', val: 3 }
+                            ].map(filter => (
+                              <button
+                                key={filter.val}
+                                onClick={() => setLibraryGradeFilter(filter.val)}
+                                className={`px-2 py-1 rounded font-bold transition-colors ${
+                                  libraryGradeFilter === filter.val 
+                                    ? 'bg-indigo-600 text-white' 
+                                    : 'text-slate-600 hover:text-indigo-600'
+                                }`}
+                              >
+                                {filter.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* 기관 필터 */}
+                          <div className="flex items-center bg-white p-1 rounded-lg border border-slate-200 text-xs shadow-2xs">
+                            <span className="text-[11px] font-bold text-slate-400 px-1.5">기관:</span>
+                            {[
+                              { label: '전체', val: 'all' },
+                              { label: '시도교육청', val: 'sido' },
+                              { label: '수능/평가원', val: 'eval' }
+                            ].map(filter => (
+                              <button
+                                key={filter.val}
+                                onClick={() => setLibraryOrgFilter(filter.val)}
+                                className={`px-2 py-1 rounded font-bold transition-colors ${
+                                  libraryOrgFilter === filter.val 
+                                    ? 'bg-indigo-600 text-white' 
+                                    : 'text-slate-600 hover:text-indigo-600'
+                                }`}
+                              >
+                                {filter.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 공인 기출 회차 카드 그리드 */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                        {OFFICIAL_EXAM_LIBRARY
+                          .filter(exam => libraryGradeFilter === 'all' || exam.grade === libraryGradeFilter)
+                          .filter(exam => {
+                            if (libraryOrgFilter === 'all') return true;
+                            if (libraryOrgFilter === 'sido') return exam.org === 'sido';
+                            if (libraryOrgFilter === 'eval') return exam.org === 'eval' || exam.org === 'csat';
+                            return true;
+                          })
+                          .map((exam) => (
+                            <div 
+                              key={exam.id}
+                              className="skeuo-card p-4 rounded-xl border border-slate-200/80 hover:border-indigo-400 transition-all flex flex-col justify-between group hover:shadow-md bg-white text-left"
+                            >
+                              <div>
+                                <div className="flex items-center justify-between gap-1 mb-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${exam.badgeColor}`}>
+                                      고{exam.grade}
+                                    </span>
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                                      {exam.round}
+                                    </span>
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 font-medium">
+                                    {exam.examDate} 시행
+                                  </span>
+                                </div>
+
+                                <h4 className="text-sm font-black text-slate-900 group-hover:text-indigo-600 transition-colors line-clamp-1">
+                                  {exam.shortTitle || exam.title}
+                                </h4>
+                                <p className="text-[11px] font-medium text-slate-500 mt-1 line-clamp-2 leading-relaxed">
+                                  {exam.description}
+                                </p>
+                              </div>
+
+                              <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between">
+                                <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                                  <span className="text-emerald-600 font-bold">● 1:1 쌍둥이 연동</span>
+                                  <span>·</span>
+                                  <span>{exam.items.length}문항</span>
+                                </div>
+                                <button
+                                  onClick={() => loadOfficialExam(exam.id)}
+                                  className="skeuo-btn px-3 py-1.5 rounded-lg text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 active:scale-95 transition-all shadow-xs flex items-center gap-1 group-hover:shadow"
+                                >
+                                  <span>즉시 응시</span>
+                                  <span className="text-[10px]">➔</span>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
 
                   {examBankTab === 'preset' && (
                     <div className="space-y-3 animate-fade-in text-left">
