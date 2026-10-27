@@ -26,6 +26,7 @@ import {
 } from './utils/audioUtils';
 import { callUnifiedLlm as rawCallUnifiedLlm } from './services/llmService';
 import { RadarChartWidget } from './components/RadarChartWidget';
+import { PhoneticRadarWidget, PHONETIC_RULE_KEYS } from './components/PhoneticRadarWidget';
 
     export default function App() {
       // 보안 디코더 (GitHub Secret Scanning 방지 및 안전한 로컬 보관)
@@ -113,6 +114,29 @@ import { RadarChartWidget } from './components/RadarChartWidget';
       const officialAudioRef = useRef(null);
       const [officialAudioTime, setOfficialAudioTime] = useState(0);
       const [currentLoadedExamMeta, setCurrentLoadedExamMeta] = useState(null); // 현재 선택된 기출 시험 정보
+
+      // [신규 2단계 고도화] 대본 문장별 인라인 쉐도잉 클리닉 상태
+      const [activeSentenceShadowingKey, setActiveSentenceShadowingKey] = useState(null); // "${itemId}_${lineIdx}"
+      const [sentenceShadowingResults, setSentenceShadowingResults] = useState({}); // { [sentenceKey]: analysisResult }
+      const sentenceRecognitionRef = useRef(null);
+
+      // [신규 3단계 고도화] 7대 음운 규칙 취약점 상태 및 차트 모드
+      const [radarMode, setRadarMode] = useState('phonetic'); // 'phonetic' (7대 음운 취약점) | 'general' (6대 전투력)
+      const [phoneticStats, setPhoneticStats] = useState(() => {
+        try {
+          const saved = localStorage.getItem('adaptive_phonetic_stats');
+          if (saved) return JSON.parse(saved);
+        } catch(e) {}
+        return {
+          liaison_linking: 72,
+          flap_t: 65,
+          silent_letter: 78,
+          schwa_reduction: 52,
+          glottal_stop: 68,
+          palatalization: 82,
+          consonant_cluster_reduction: 60
+        };
+      });
 
       // [신규 고도화] 틀린 문제 1:1 쌍둥이 변형 문항 상태
       const [generatingTwinId, setGeneratingTwinId] = useState(null); // 단일 쌍둥이 생성 로딩 ID
@@ -1513,6 +1537,13 @@ import { RadarChartWidget } from './components/RadarChartWidget';
             synthRef.current.cancel();
           } catch(e) {}
         }
+        if (sentenceRecognitionRef.current) {
+          try {
+            sentenceRecognitionRef.current.stop();
+          } catch(e) {}
+          sentenceRecognitionRef.current = null;
+        }
+        setActiveSentenceShadowingKey(null);
         setPlayingId(null); 
         setIsPaused(false); 
         setPlayingStage(null);
@@ -1632,6 +1663,219 @@ import { RadarChartWidget } from './components/RadarChartWidget';
           }
         }
         return dp[m][n];
+      };
+
+      // [신규 2단계 고도화] 문장별 쉐도잉 단어 1:1 대조 및 발음 일치도(%) 채점 엔진
+      const evaluateSentenceShadowing = (originalSentence, spokenText) => {
+        if (!originalSentence) return { wordsAnalysis: [], score: 0, recognizedText: spokenText || '' };
+        
+        const cleanOrig = originalSentence.replace(/^[MWmw남여]:\s*/, '').trim();
+        const origTokens = cleanOrig.split(/\s+/).filter(Boolean);
+        const origWords = origTokens.map(w => w.toLowerCase().replace(/[^a-z0-9'-]/g, ''));
+
+        const spokenTokens = (spokenText || '').trim().split(/\s+/).filter(Boolean);
+        const spokenWords = spokenTokens.map(w => w.toLowerCase().replace(/[^a-z0-9'-]/g, ''));
+
+        let exactMatches = 0;
+        let similarMatches = 0;
+        let spokenIndex = 0;
+
+        const wordsAnalysis = origTokens.map((rawToken, i) => {
+          const origWord = origWords[i];
+          if (!origWord) {
+            return { raw: rawToken, orig: origWord, matched: '', status: 'exact' };
+          }
+
+          let bestMatch = null;
+          let bestStatus = 'missing';
+          let bestDist = 999;
+          let matchedIdx = -1;
+
+          for (let s = Math.max(0, spokenIndex - 1); s <= Math.min(spokenWords.length - 1, spokenIndex + 2); s++) {
+            const sw = spokenWords[s];
+            if (!sw) continue;
+
+            if (sw === origWord) {
+              bestMatch = sw;
+              bestStatus = 'exact';
+              bestDist = 0;
+              matchedIdx = s;
+              break;
+            }
+
+            const dist = getLevenshteinDistance(origWord, sw);
+            if (dist <= 1 && origWord.length >= 3 && dist < bestDist) {
+              bestMatch = sw;
+              bestStatus = 'similar';
+              bestDist = dist;
+              matchedIdx = s;
+            }
+          }
+
+          if (bestStatus === 'exact') {
+            exactMatches++;
+            if (matchedIdx !== -1) spokenIndex = matchedIdx + 1;
+          } else if (bestStatus === 'similar') {
+            similarMatches++;
+            if (matchedIdx !== -1) spokenIndex = matchedIdx + 1;
+          }
+
+          return {
+            raw: rawToken,
+            orig: origWord,
+            matched: bestMatch || '',
+            status: bestStatus
+          };
+        });
+
+        const totalWords = origWords.filter(Boolean).length || 1;
+        const rawScore = Math.round(((exactMatches * 1.0) + (similarMatches * 0.65)) / totalWords * 100);
+        const score = Math.min(100, Math.max(0, rawScore));
+
+        return {
+          originalSentence: cleanOrig,
+          recognizedText: spokenText || '',
+          wordsAnalysis,
+          score,
+          exactCount: exactMatches,
+          similarCount: similarMatches,
+          missingCount: Math.max(0, totalWords - (exactMatches + similarMatches))
+        };
+      };
+
+      // [신규 2단계 고도화] 대사별 인라인 쉐도잉 시작/중단 토글
+      const toggleSentenceShadowing = (sentenceKey, cleanSentence, accent = 'us') => {
+        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRec) {
+          showToast("이 브라우저는 음성 인식을 지원하지 않습니다. Chrome 브라우저를 권장합니다.", "error");
+          return;
+        }
+
+        if (activeSentenceShadowingKey === sentenceKey) {
+          if (sentenceRecognitionRef.current) {
+            try { sentenceRecognitionRef.current.stop(); } catch(e) {}
+          }
+          setActiveSentenceShadowingKey(null);
+          showToast("쉐도잉 녹음이 완료되었습니다.", "success");
+          return;
+        }
+
+        if (sentenceRecognitionRef.current) {
+          try { sentenceRecognitionRef.current.stop(); } catch(e) {}
+        }
+        stopSpeech();
+
+        const recognition = new SpeechRec();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = accent === 'uk' ? 'en-GB' : 'en-US';
+
+        setActiveSentenceShadowingKey(sentenceKey);
+        sentenceRecognitionRef.current = recognition;
+
+        recognition.onresult = (e) => {
+          const spoken = Array.from(e.results).map(r => r[0].transcript).join(' ').trim();
+          const analysis = evaluateSentenceShadowing(cleanSentence, spoken);
+          setSentenceShadowingResults(prev => ({
+            ...prev,
+            [sentenceKey]: analysis
+          }));
+        };
+
+        recognition.onend = () => {
+          setActiveSentenceShadowingKey(null);
+        };
+
+        recognition.onerror = (e) => {
+          console.warn("문장 쉐도잉 음성 인식 오류:", e);
+          setActiveSentenceShadowingKey(null);
+          if (e.error !== 'no-speech' && e.error !== 'aborted') {
+            showToast("마이크 음성 인식 오류가 발생했습니다. 권한을 확인해주세요.", "error");
+          }
+        };
+
+        try {
+          recognition.start();
+          showToast("🎙️ 마이크 ON: 화면의 문장을 원어민처럼 소리 내어 읽으세요!", "info");
+        } catch (err) {
+          console.warn("recognition.start() 오류:", err);
+          setActiveSentenceShadowingKey(null);
+        }
+      };
+
+      // [신규 2단계 고도화] 쉐도잉 대상 단일 문장 원음/TTS 1회 청취
+      const playSingleSentence = (cleanText, speaker = 'W', accent = 'us') => {
+        stopSpeech();
+        if (!synthRef.current) return;
+        let voices = synthRef.current.getVoices();
+        const { maleVoice, femaleVoice } = resolveDisjointVoices(voices, aiMaleVoice, aiFemaleVoice, accent);
+        const utter = new SpeechSynthesisUtterance(cleanText);
+        utter.lang = accent === 'uk' ? 'en-GB' : 'en-US';
+        utter.voice = speaker === 'M' ? maleVoice : femaleVoice;
+        utter.rate = playbackRate;
+        utterancesRef.current.push(utter);
+        synthRef.current.speak(utter);
+      };
+
+      // [신규 3단계 고도화] 최취약 음운 규칙 계산
+      const getWeakestPhoneticRule = () => {
+        let lowestKey = 'schwa_reduction';
+        let lowestVal = 999;
+        PHONETIC_RULE_KEYS.forEach(({ key }) => {
+          const val = phoneticStats[key] !== undefined ? phoneticStats[key] : 70;
+          if (val < lowestVal) {
+            lowestVal = val;
+            lowestKey = key;
+          }
+        });
+        const meta = PHONETIC_RULE_KEYS.find(k => k.key === lowestKey) || PHONETIC_RULE_KEYS[0];
+        return { ...meta, score: lowestVal };
+      };
+
+      // [신규 3단계 고도화] 🎯 최취약 음운 1클릭 맞춤 복습팩 시작
+      const startWeakestPhoneticWorkout = () => {
+        const weakest = getWeakestPhoneticRule();
+        stopSpeech();
+        
+        let matchingItems = [];
+        OFFICIAL_EXAM_LIBRARY.forEach(exam => {
+          exam.items.forEach(it => {
+            if (it.phoneticTrapType === weakest.key) {
+              matchingItems.push({
+                ...it,
+                examAudioUrl: exam.audioUrl,
+                hasOfficialAudio: exam.hasOfficialAudio
+              });
+            }
+          });
+        });
+
+        if (matchingItems.length < 3) {
+          OFFICIAL_EXAM_LIBRARY[0].items.forEach(it => {
+            if (!matchingItems.some(m => m.id === it.id)) {
+              matchingItems.push({ 
+                ...it, 
+                examAudioUrl: OFFICIAL_EXAM_LIBRARY[0].audioUrl,
+                hasOfficialAudio: OFFICIAL_EXAM_LIBRARY[0].hasOfficialAudio,
+                phoneticTrapType: weakest.key 
+              });
+            }
+          });
+        }
+
+        const workoutItems = matchingItems.slice(0, 3).map((it, idx) => ({
+          ...it,
+          id: Date.now() + idx
+        }));
+
+        setTestData(workoutItems);
+        setAnswers({});
+        setHintLevels({});
+        setHasSubmitted(false);
+        setPlayCountMap({});
+        setExamTimer(workoutItems.length * 120);
+        setExamState('taking');
+        showToast("🎯 최취약 음운 '" + weakest.label + "' 1클릭 집중 극복 훈련을 시작합니다!", 'success');
       };
 
       // [신규 고도화] NEIS(나이스) 세특 정밀 바이트(1500B) 계산기
@@ -3190,6 +3434,23 @@ ${spokenText}
               questionCategory: item.questionCategory, accent: item.accent, blankWord: item.saBlankWord
             });
           }
+
+          // [신규 3단계 고도화] 7대 음운 규칙 점수 동적 갱신
+          setPhoneticStats(prev => {
+            const next = { ...prev };
+            const trap = item.phoneticTrapType;
+            if (trap && next[trap] !== undefined) {
+              if (isMcCorrect && isSaCorrect) {
+                next[trap] = Math.min(100, next[trap] + 4);
+              } else {
+                next[trap] = Math.max(20, next[trap] - 6);
+              }
+            }
+            try {
+              localStorage.setItem('adaptive_phonetic_stats', JSON.stringify(next));
+            } catch(e) {}
+            return next;
+          });
           return { ...item, userMc, userSa, isMcCorrect, isSaCorrect, isExactSaCorrect, isSaTolerant, tolerantExpected };
         });
 
@@ -4517,14 +4778,59 @@ ${feedbackList.slice(-3).join('\n')}
                     )}
                   </div>
 
-                  {/* 레이더 차트 패널 */}
-                  <div className="flex-1 skeuo-inset p-4 flex flex-col items-center justify-center">
-                    <h3 className="text-xs font-black text-slate-700 mb-2 uppercase tracking-wide flex items-center gap-1.5">
-                      <span>📊 청취 6대 영역 전투력 분석</span>
-                    </h3>
-                    <div className="w-full h-[210px] relative">
-                      <RadarChartWidget stats={playerProfile.stats} />
+                  {/* 레이더 차트 패널 (3단계 고도화: 7대 음운 취약점 & 6대 전투력 2단 탭) */}
+                  <div className="flex-1 skeuo-inset p-3.5 flex flex-col justify-between">
+                    <div className="flex items-center justify-between border-b border-slate-300 pb-2 mb-2">
+                      <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-200/90 border border-slate-300 text-[11px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() => setRadarMode('phonetic')}
+                          className={'px-2 py-0.5 rounded transition-all flex items-center gap-1 ' + (radarMode === 'phonetic' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900')}
+                        >
+                          <span>🎯 7대 음운 취약점</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRadarMode('general')}
+                          className={'px-2 py-0.5 rounded transition-all flex items-center gap-1 ' + (radarMode === 'general' ? 'bg-teal-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900')}
+                        >
+                          <span>📊 6대 청취 전투력</span>
+                        </button>
+                      </div>
+
+                      {radarMode === 'phonetic' && (() => {
+                        const weakest = getWeakestPhoneticRule();
+                        return (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-300 animate-pulse">
+                            취약: {weakest.label} ({weakest.score}점)
+                          </span>
+                        );
+                      })()}
                     </div>
+
+                    <div className="w-full h-[180px] relative">
+                      {radarMode === 'phonetic' ? (
+                        <PhoneticRadarWidget statsMap={phoneticStats} />
+                      ) : (
+                        <RadarChartWidget stats={playerProfile.stats} />
+                      )}
+                    </div>
+
+                    {/* [신규 3단계] 최취약 음운 1클릭 집중 복습팩 버튼 */}
+                    {radarMode === 'phonetic' && (() => {
+                      const weakest = getWeakestPhoneticRule();
+                      return (
+                        <button
+                          type="button"
+                          onClick={startWeakestPhoneticWorkout}
+                          className="skeuo-btn w-full mt-2 py-2 px-3 rounded-lg text-xs font-black text-white bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 active:scale-98 transition-all shadow-xs flex items-center justify-center gap-1.5"
+                          title="정답률이 가장 낮은 음운 규칙을 집중 공략하는 3문항 맞춤 복습팩을 시작합니다."
+                        >
+                          <span>🎯 최취약 음운 '{weakest.label}' 1클릭 복습팩</span>
+                          <span className="text-[10px] bg-white/20 px-1 rounded">풀기 ▶</span>
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -5496,27 +5802,114 @@ ${feedbackList.slice(-3).join('\n')}
                             화자: 👨 {aiMaleVoice} / 👩 {aiFemaleVoice}
                           </span>
                         </div>
-                        <div className="font-sans text-sm leading-relaxed space-y-1.5 text-slate-800">
+                        <div className="font-sans text-sm leading-relaxed space-y-2.5 text-slate-800">
                           {item.transcript.split('\n').filter(l => l.trim()).map((line, lIdx) => {
                             const isM = line.trim().startsWith('M:');
                             const isW = line.trim().startsWith('W:');
                             const clean = line.replace(/^[MWmw남여]:\s*/, '');
+                            const sentKey = item.id + '_line_' + lIdx;
+                            const isRecordingThis = activeSentenceShadowingKey === sentKey;
+                            const shadowResult = sentenceShadowingResults[sentKey];
+
                             return (
-                              <div key={lIdx} className="flex items-start gap-2">
-                                {isM ? (
-                                  <span className="text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 px-1.5 py-0.5 rounded shrink-0 mt-0.5 font-mono">
-                                    👨 M
-                                  </span>
-                                ) : isW ? (
-                                  <span className="text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300 px-1.5 py-0.5 rounded shrink-0 mt-0.5 font-mono">
-                                    👩 W
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded shrink-0 mt-0.5 font-mono">
-                                    🎙️
-                                  </span>
+                              <div key={lIdx} className="p-2.5 rounded-lg border border-slate-200/90 bg-white/70 hover:bg-white transition-all space-y-2">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div className="flex items-start gap-2 flex-1">
+                                    {isM ? (
+                                      <span className="text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 px-1.5 py-0.5 rounded shrink-0 mt-0.5 font-mono">
+                                        👨 M
+                                      </span>
+                                    ) : isW ? (
+                                      <span className="text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300 px-1.5 py-0.5 rounded shrink-0 mt-0.5 font-mono">
+                                        👩 W
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded shrink-0 mt-0.5 font-mono">
+                                        🎙️
+                                      </span>
+                                    )}
+                                    <span className="font-medium text-slate-900 leading-snug">{clean}</span>
+                                  </div>
+
+                                  {/* 인라인 제어 버튼 (한 문장 듣기 & 따라 말하기) */}
+                                  <div className="flex items-center gap-1.5 shrink-0 no-print">
+                                    <button
+                                      type="button"
+                                      onClick={() => playSingleSentence(clean, isM ? 'M' : 'W', item.accent)}
+                                      className="skeuo-btn px-2 py-1 text-[11px] font-bold text-slate-700 hover:text-indigo-600 flex items-center gap-1"
+                                      title="이 문장만 원어민 발음으로 1회 듣습니다."
+                                    >
+                                      <span>🔊 듣기</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleSentenceShadowing(sentKey, clean, item.accent)}
+                                      className={'skeuo-btn px-2.5 py-1 text-[11px] font-bold flex items-center gap-1 transition-all ' + (
+                                        isRecordingThis 
+                                          ? 'skeuo-btn-red text-white animate-pulse shadow-md' 
+                                          : 'skeuo-btn-teal text-white shadow-xs'
+                                      )}
+                                      title="마이크로 이 문장을 따라 말하고 발음을 1:1 대조 채점받습니다."
+                                    >
+                                      <span>{isRecordingThis ? '⏹ 녹음 완료' : '🎙️ 따라 말하기'}</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* 단어 단위 1:1 대조 및 발음 일치도 결과 칩스 */}
+                                {shadowResult && (
+                                  <div className="mt-2 pt-2 border-t border-slate-100 bg-slate-50/80 p-2.5 rounded-lg space-y-1.5 text-xs animate-fade-in">
+                                    <div className="flex flex-wrap items-center justify-between gap-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className={'px-2 py-0.5 rounded-full font-mono font-bold text-[11px] ' + (
+                                          shadowResult.score >= 80 
+                                            ? 'bg-emerald-600 text-white' 
+                                            : shadowResult.score >= 50 
+                                            ? 'bg-amber-500 text-white' 
+                                            : 'bg-rose-500 text-white'
+                                        )}>
+                                          발음 일치도: {shadowResult.score}점
+                                        </span>
+                                        <span className="text-[11px] text-slate-500">
+                                          (정확 {shadowResult.exactCount} · 유사 {shadowResult.similarCount} · 누락 {shadowResult.missingCount})
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-400">
+                                        🟢정확  🟡유사  🔴누락/불일치
+                                      </span>
+                                    </div>
+
+                                    {/* 1:1 단어 대조 칩 */}
+                                    <div className="flex flex-wrap gap-1.5 pt-1">
+                                      {shadowResult.wordsAnalysis.map((w, wIdx) => {
+                                        const badgeStyle = w.status === 'exact'
+                                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                          : w.status === 'similar'
+                                          ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                          : 'bg-rose-100 text-rose-900 border-rose-300 opacity-80';
+
+                                        const mark = w.status === 'exact' ? '✓' : w.status === 'similar' ? '~' : '✗';
+
+                                        return (
+                                          <span 
+                                            key={wIdx} 
+                                            className={'px-1.5 py-0.5 rounded text-[11px] font-mono font-medium border flex items-center gap-0.5 ' + badgeStyle}
+                                            title={'원문: ' + w.raw + (w.matched ? ' | 인식: ' + w.matched : ' (미인식)')}
+                                          >
+                                            <span>{w.raw}</span>
+                                            <span className="font-bold text-[9px]">{mark}</span>
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+
+                                    {shadowResult.recognizedText && (
+                                      <div className="text-[11px] text-slate-500 pt-0.5 font-mono">
+                                        🗣️ 인식된 발화: <span className="text-slate-800 font-sans italic">"{shadowResult.recognizedText}"</span>
+                                      </div>
+                                    )}
+                                  </div>
                                 )}
-                                <span className="font-medium text-slate-900">{clean}</span>
                               </div>
                             );
                           })}
