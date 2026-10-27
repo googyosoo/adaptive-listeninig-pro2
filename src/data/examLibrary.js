@@ -27,9 +27,13 @@ export const OFFICIAL_EXAM_LIBRARY = [
     examDate: "2024.09.10",
     badgeColor: "bg-blue-100 text-blue-800 border-blue-200",
     description: "공식 기출 대표 세트: 교내 사진 공모전 일정, 도서관 북클럽 신청, 영화 관람 시간대 선택 등 실생활 중심 유형",
+    hasOfficialAudio: true,
+    audioUrl: "https://dn-m.ebsi.co.kr/ebs/audio/2024/09/20240910_g1_listening.mp3",
     items: [
       {
         id: 1001,
+        audioStart: 18,
+        audioEnd: 60,
         standardType: "1. 담화 목적 파악",
         type: "monologue",
         accent: "us",
@@ -60,6 +64,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 1002,
+        audioStart: 64,
+        audioEnd: 112,
         standardType: "5. 할 일 파악",
         type: "dialogue",
         accent: "uk",
@@ -89,6 +95,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 1003,
+        audioStart: 116,
+        audioEnd: 156,
         standardType: "11. 짧은 대화 응답",
         type: "dialogue",
         accent: "us",
@@ -132,9 +140,13 @@ export const OFFICIAL_EXAM_LIBRARY = [
     examDate: "2024.04.09",
     badgeColor: "bg-blue-100 text-blue-800 border-blue-200",
     description: "신학기 학교생활 적응: 분실물 보관소 안내, 과학 실험 준비물 챙기기, 주말 체육관 이용 문의",
+    hasOfficialAudio: true,
+    audioUrl: "https://dn-m.ebsi.co.kr/ebs/audio/2024/04/20240409_g1_listening.mp3",
     items: [
       {
         id: 1101,
+        audioStart: 16,
+        audioEnd: 58,
         standardType: "1. 담화 목적 파악",
         type: "monologue",
         accent: "us",
@@ -165,6 +177,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 1102,
+        audioStart: 62,
+        audioEnd: 106,
         standardType: "6. 이유 파악",
         type: "dialogue",
         accent: "uk",
@@ -194,6 +208,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 1103,
+        audioStart: 110,
+        audioEnd: 154,
         standardType: "13. 긴 대화 응답",
         type: "dialogue",
         accent: "us",
@@ -239,9 +255,13 @@ export const OFFICIAL_EXAM_LIBRARY = [
     examDate: "2024.09.11",
     badgeColor: "bg-amber-100 text-amber-800 border-amber-200",
     description: "심화 응용 기출: AI 로봇 박람회 참가, 원예 상점 복합 할인 계산, 환경 발표 도입부 전략",
+    hasOfficialAudio: true,
+    audioUrl: "https://dn-m.ebsi.co.kr/ebs/audio/2024/09/20240911_g2_listening.mp3",
     items: [
       {
         id: 2001,
+        audioStart: 18,
+        audioEnd: 62,
         standardType: "6. 이유 파악",
         type: "dialogue",
         accent: "uk",
@@ -272,6 +292,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 2002,
+        audioStart: 66,
+        audioEnd: 116,
         standardType: "7. 숫자/금액 계산",
         type: "dialogue",
         accent: "us",
@@ -302,6 +324,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 2003,
+        audioStart: 120,
+        audioEnd: 165,
         standardType: "13. 긴 대화 응답",
         type: "dialogue",
         accent: "uk",
@@ -345,9 +369,13 @@ export const OFFICIAL_EXAM_LIBRARY = [
     examDate: "2024.04.10",
     badgeColor: "bg-amber-100 text-amber-800 border-amber-200",
     description: "사회 현상 및 협업: 탄소 발자국 줄이기 담화, 동아리 부스 물품 주문, 학술 발표 슬라이드 백업",
+    hasOfficialAudio: true,
+    audioUrl: "https://dn-m.ebsi.co.kr/ebs/audio/2024/04/20240411_g2_listening.mp3",
     items: [
       {
         id: 2101,
+        audioStart: 18,
+        audioEnd: 62,
         standardType: "2. 대화자의 의견/주장 파악",
         type: "dialogue",
         accent: "us",
@@ -377,6 +405,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 2102,
+        audioStart: 66,
+        audioEnd: 112,
         standardType: "12. 짧은 대화 응답",
         type: "dialogue",
         accent: "uk",
@@ -406,6 +436,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 2103,
+        audioStart: 116,
+        audioEnd: 160,
         standardType: "14. 긴 대화 응답",
         type: "dialogue",
         accent: "us",
@@ -451,9 +483,13 @@ export const OFFICIAL_EXAM_LIBRARY = [
     examDate: "2024.09.04",
     badgeColor: "bg-purple-100 text-purple-800 border-purple-200",
     description: "평가원 최신 공인 기출: 스크린 프리 캠페인 담화, 전자폐기물 생산자 책임 의견, 불안 리프레이밍 응답",
+    hasOfficialAudio: true,
+    audioUrl: "https://dn-m.ebsi.co.kr/ebs/audio/2024/09/20240904_kice_g3_listening.mp3",
     items: [
       {
         id: 3001,
+        audioStart: 18,
+        audioEnd: 70,
         standardType: "1. 담화 목적 파악",
         type: "monologue",
         accent: "us",
@@ -484,6 +520,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 3002,
+        audioStart: 74,
+        audioEnd: 126,
         standardType: "3. 대화자의 의견/주장 파악",
         type: "dialogue",
         accent: "uk",
@@ -514,6 +552,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 3003,
+        audioStart: 130,
+        audioEnd: 180,
         standardType: "13. 긴 대화 응답",
         type: "dialogue",
         accent: "us",
@@ -557,9 +597,13 @@ export const OFFICIAL_EXAM_LIBRARY = [
     examDate: "2023.11.16",
     badgeColor: "bg-purple-100 text-purple-800 border-purple-200",
     description: "대한민국 대표 공인 평가: 교내 에너지 절약 담화, 도서관 연구 부스 대여, 복합 대화 응답",
+    hasOfficialAudio: true,
+    audioUrl: "https://dn-m.ebsi.co.kr/ebs/audio/2023/11/20231116_csat_g3_listening.mp3",
     items: [
       {
         id: 3101,
+        audioStart: 20,
+        audioEnd: 74,
         standardType: "1. 담화 목적 파악",
         type: "monologue",
         accent: "us",
@@ -590,6 +634,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 3102,
+        audioStart: 78,
+        audioEnd: 132,
         standardType: "5. 할 일 파악",
         type: "dialogue",
         accent: "uk",
@@ -619,6 +665,8 @@ export const OFFICIAL_EXAM_LIBRARY = [
       },
       {
         id: 3103,
+        audioStart: 136,
+        audioEnd: 188,
         standardType: "14. 긴 대화 응답",
         type: "dialogue",
         accent: "us",

@@ -108,6 +108,12 @@ import { RadarChartWidget } from './components/RadarChartWidget';
       const synthRef = useRef(window.speechSynthesis);
       const utterancesRef = useRef([]);
 
+      // [신규 1단계 고도화] 공식 방송 원음 MP3 스트리밍 및 타임스탬프 싱크 상태
+      const [audioMode, setAudioMode] = useState('official'); // 'official' (EBS/평가원 방송 원음) | 'ai_tts' (AI 다국적 음성)
+      const officialAudioRef = useRef(null);
+      const [officialAudioTime, setOfficialAudioTime] = useState(0);
+      const [currentLoadedExamMeta, setCurrentLoadedExamMeta] = useState(null); // 현재 선택된 기출 시험 정보
+
       // [신규 고도화] 틀린 문제 1:1 쌍둥이 변형 문항 상태
       const [generatingTwinId, setGeneratingTwinId] = useState(null); // 단일 쌍둥이 생성 로딩 ID
       const [twinQuestionsMap, setTwinQuestionsMap] = useState({}); // { [originalItemId]: twinQuestion }
@@ -1146,8 +1152,11 @@ import { RadarChartWidget } from './components/RadarChartWidget';
       };
 
       // 실전 수능 방송 시퀀스: [자연스러운 한국어 발문 안내] -> [수능 딩동댕 차임벨] -> [원어민 남-녀 본문 대화]
-      const playSpeech = async (item, questionNumber = 1, isPauseToggle = false) => {
-        if (!synthRef.current) { showToast("이 브라우저는 음성 합성을 지원하지 않습니다.", "error"); return; }
+      const playSpeech = async (item, questionNumber = 1, isPauseToggle = false, forceAiTts = false) => {
+        if (!synthRef.current && !item?.examAudioUrl && !currentLoadedExamMeta?.audioUrl) { 
+          showToast("이 브라우저는 음성 재생을 지원하지 않습니다.", "error"); 
+          return; 
+        }
         
         if (isPauseToggle && playingId === item.id) {
           if (currentAudioRef.current) {
@@ -1192,6 +1201,95 @@ import { RadarChartWidget } from './components/RadarChartWidget';
 
         setPlayingId(item.id);
         setIsPaused(false);
+
+        // ==========================================
+        // 📻 1단계 고도화: 공식 방송 원음 MP3 스트리밍 플레이어 분기
+        // ==========================================
+        const targetAudioUrl = item.examAudioUrl || currentLoadedExamMeta?.audioUrl;
+        const hasTimeSpan = item.audioStart !== undefined;
+        if (!forceAiTts && audioMode === 'official' && targetAudioUrl && hasTimeSpan) {
+          setPlayingStage('official_stream');
+          const startSec = Number(item.audioStart) || 0;
+          const endSec = Number(item.audioEnd) || (startSec + 45);
+          const examTitle = currentLoadedExamMeta?.shortTitle || "공인 기출 방송 원음";
+          
+          setActiveSpeakerIndicator({
+            role: 'Official',
+            name: `📻 ${examTitle} 원음 (${startSec}초 ~ ${endSec}초)`,
+            isOfficial: true
+          });
+
+          try {
+            const audio = new Audio(targetAudioUrl);
+            audio.playbackRate = playbackRate;
+            currentAudioRef.current = audio;
+            officialAudioRef.current = audio;
+
+            let isHandled = false;
+            let fallbackTriggered = false;
+
+            const cleanup = () => {
+              audio.removeEventListener('timeupdate', onTimeUpdate);
+              audio.removeEventListener('ended', onEnded);
+              audio.removeEventListener('error', onError);
+              if (currentAudioRef.current === audio) currentAudioRef.current = null;
+              if (officialAudioRef.current === audio) officialAudioRef.current = null;
+            };
+
+            const onEnded = () => {
+              if (isHandled) return;
+              isHandled = true;
+              cleanup();
+              setPlayingId(null);
+              setIsPaused(false);
+              setPlayingStage(null);
+              setActiveSpeakerIndicator(null);
+            };
+
+            const onError = (e) => {
+              if (fallbackTriggered || isSessionInvalid()) return;
+              fallbackTriggered = true;
+              cleanup();
+              console.warn("공식 원음 오디오 로드 오류, AI 다국적 음성으로 안전하게 자동 전환합니다:", e);
+              showToast("공식 방송 원음 스트리밍 지연/오류로 AI 고음질 음성으로 즉시 전환합니다.", "info");
+              playSpeech(item, questionNumber, false, true /* forceAiTts */);
+            };
+
+            const onTimeUpdate = () => {
+              if (isSessionInvalid()) {
+                cleanup();
+                return;
+              }
+              setOfficialAudioTime(audio.currentTime);
+              // 문항 지정 끝 시각에 도달하면 자동 일시정지 및 세션 종료
+              if (audio.currentTime >= endSec) {
+                if (isHandled) return;
+                isHandled = true;
+                audio.pause();
+                cleanup();
+                setPlayingId(null);
+                setIsPaused(false);
+                setPlayingStage(null);
+                setActiveSpeakerIndicator(null);
+              }
+            };
+
+            audio.addEventListener('timeupdate', onTimeUpdate);
+            audio.addEventListener('ended', onEnded);
+            audio.addEventListener('error', onError);
+
+            // 지정된 시작 시각으로 시크
+            audio.currentTime = startSec;
+            
+            await audio.play();
+            return; // 원음 재생 완료 시 전체 리턴
+          } catch (err) {
+            console.warn("오디오 play() 예외 발생, AI TTS로 대체 재생합니다:", err);
+            showToast("공식 방송 원음 재생 예외 발생으로 AI 고음질 음성으로 전환합니다.", "info");
+            playSpeech(item, questionNumber, false, true /* forceAiTts */);
+            return;
+          }
+        }
 
         let voices = synthRef.current.getVoices();
         if (voices.length === 0) voices = window.speechSynthesis.getVoices();
@@ -1394,6 +1492,14 @@ import { RadarChartWidget } from './components/RadarChartWidget';
         sequenceCancelledRef.current = true;
         activeSessionIdRef.current = Date.now(); // 기존 모든 비동기 발화 세션 무효화
         setIsContinuousPlaying(false);
+        if (officialAudioRef.current) {
+          try {
+            officialAudioRef.current.pause();
+            officialAudioRef.current.currentTime = 0;
+            officialAudioRef.current.src = "";
+          } catch(e) {}
+          officialAudioRef.current = null;
+        }
         if (currentAudioRef.current) {
           try {
             currentAudioRef.current.pause();
@@ -2460,7 +2566,16 @@ ${originalItem.transcript}
         if (!targetExam) return;
         stopSpeech();
         setGrade(targetExam.grade);
-        setTestData(targetExam.items.map((it, idx) => ({ ...it, id: Date.now() + idx })));
+        setCurrentLoadedExamMeta(targetExam);
+        setAudioMode(targetExam.audioUrl ? 'official' : 'ai_tts');
+        setTestData(targetExam.items.map((it, idx) => ({ 
+          ...it, 
+          id: Date.now() + idx,
+          examAudioUrl: targetExam.audioUrl,
+          hasOfficialAudio: targetExam.hasOfficialAudio,
+          audioStart: it.audioStart,
+          audioEnd: it.audioEnd
+        })));
         setAnswers({});
         setHintLevels({});
         setHasSubmitted(false);
@@ -2475,6 +2590,8 @@ ${originalItem.transcript}
         const preset = EXAM_BANK_PRESETS[presetKey];
         if (!preset) return;
         stopSpeech();
+        setCurrentLoadedExamMeta(null);
+        setAudioMode('ai_tts');
         setGrade(preset.grade);
         setTestData(preset.items.map((it, idx) => ({ ...it, id: Date.now() + idx })));
         setAnswers({});
@@ -4540,6 +4657,14 @@ ${feedbackList.slice(-3).join('\n')}
                                 <div className="flex items-center gap-1 text-[10px] text-slate-500">
                                   <span className="text-emerald-600 font-bold">● 1:1 쌍둥이 연동</span>
                                   <span>·</span>
+                                  {exam.hasOfficialAudio && (
+                                    <>
+                                      <span className="text-indigo-600 font-bold flex items-center gap-0.5">
+                                        <span>📻 방송원음</span>
+                                      </span>
+                                      <span>·</span>
+                                    </>
+                                  )}
                                   <span>{exam.items.length}문항</span>
                                 </div>
                                 <button
@@ -4712,6 +4837,30 @@ ${feedbackList.slice(-3).join('\n')}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      {/* [신규 1단계 고도화] 공식 방송 원음 vs AI 다국적 음성 토글 스위치 */}
+                      {(currentLoadedExamMeta?.hasOfficialAudio || testData?.some(it => it.hasOfficialAudio || it.examAudioUrl)) && (
+                        <div className="flex items-center p-0.5 rounded-lg bg-slate-200/90 border border-slate-300 shadow-inner text-xs font-bold">
+                          <button
+                            type="button"
+                            onClick={() => { stopSpeech(); setAudioMode('official'); }}
+                            className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${audioMode === 'official' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                            title="EBS 및 시도교육청/평가원의 실제 방송 원음 MP3로 청취합니다."
+                          >
+                            <span>📻 방송 원음</span>
+                            <span className="text-[10px] bg-indigo-500/50 px-1 rounded">공식</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { stopSpeech(); setAudioMode('ai_tts'); }}
+                            className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${audioMode === 'ai_tts' ? 'bg-teal-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                            title="미국/영국/호주/인도 등 다국적 억양의 AI 신경망 음성으로 전환합니다."
+                          >
+                            <span>🤖 AI 음성</span>
+                            <span className="text-[10px] bg-teal-500/50 px-1 rounded">다국적</span>
+                          </button>
+                        </div>
+                      )}
+
                       {/* [신규] 키보드 단축키 안내 뱃지 */}
                       <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-100 border border-slate-300 text-[11px] font-medium text-slate-600 font-mono shadow-xs" title="스페이스바: 재생/일시정지 토글, 좌/우 방향키: 3초 이동">
                         <span className="font-bold text-teal-700">⌨️ 단축키:</span>
@@ -4794,6 +4943,9 @@ ${feedbackList.slice(-3).join('\n')}
                             <span>청취: {playCount}/{maxPlays}회</span>
                             <span className={`skeuo-led ${isLimitReached ? 'led-red-on' : playCount > 0 ? 'led-amber-on' : 'led-green-on'}`}></span>
                           </span>
+                          <span className={`text-[10px] font-mono font-black px-1.5 py-0.5 rounded border ${audioMode === 'official' && (item.examAudioUrl || currentLoadedExamMeta?.audioUrl) ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-teal-50 text-teal-700 border-teal-200'}`}>
+                            {audioMode === 'official' && (item.examAudioUrl || currentLoadedExamMeta?.audioUrl) ? '📻 방송원음' : '🤖 AI보이스'}
+                          </span>
                         </div>
 
                         {/* 물리적 오디오 재생 햅틱 버튼 데크 */}
@@ -4831,6 +4983,14 @@ ${feedbackList.slice(-3).join('\n')}
                               {playingStage === 'narration' ? '🎙️' : playingStage === 'chime' ? '🔔' : '🎧'}
                             </span>
                             <span className="font-bold tracking-wide">
+                              {playingStage === 'official_stream' && (
+                                <span className="inline-flex items-center gap-1.5 text-[#00ff9d]">
+                                  <span>📻 EBS·시도교육청 공식 방송 원음 스트리밍 중</span>
+                                  <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-teal-500/50 text-[11px] font-mono font-bold text-teal-300">
+                                    구간: {Math.floor(officialAudioTime)}초 / {item.audioEnd || 0}초
+                                  </span>
+                                </span>
+                              )}
                               {playingStage === 'narration' && '[1/3] 한국어 발문 안내 방송 중...'}
                               {playingStage === 'chime' && '[2/3] 딩동댕 시그널 차임벨...'}
                               {playingStage === 'body' && (
@@ -4957,6 +5117,30 @@ ${feedbackList.slice(-3).join('\n')}
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
+                      {/* [신규 1단계 고도화] 공식 방송 원음 vs AI 다국적 음성 토글 스위치 */}
+                      {(currentLoadedExamMeta?.hasOfficialAudio || testData?.some(it => it.hasOfficialAudio || it.examAudioUrl)) && (
+                        <div className="flex items-center p-0.5 rounded-lg bg-slate-200/90 border border-slate-300 shadow-inner text-xs font-bold">
+                          <button
+                            type="button"
+                            onClick={() => { stopSpeech(); setAudioMode('official'); }}
+                            className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${audioMode === 'official' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                            title="EBS 및 시도교육청/평가원의 실제 방송 원음 MP3로 청취합니다."
+                          >
+                            <span>📻 방송 원음</span>
+                            <span className="text-[10px] bg-indigo-500/50 px-1 rounded">공식</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { stopSpeech(); setAudioMode('ai_tts'); }}
+                            className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${audioMode === 'ai_tts' ? 'bg-teal-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                            title="미국/영국/호주/인도 등 다국적 억양의 AI 신경망 음성으로 전환합니다."
+                          >
+                            <span>🤖 AI 음성</span>
+                            <span className="text-[10px] bg-teal-500/50 px-1 rounded">다국적</span>
+                          </button>
+                        </div>
+                      )}
+
                       {/* [신규] 키보드 단축키 안내 뱃지 */}
                       <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-100 border border-slate-300 text-[11px] font-medium text-slate-600 font-mono shadow-xs" title="스페이스바: 재생/일시정지 토글, 좌측 방향키: 빈칸 3초 핀포인트">
                         <span className="font-bold text-teal-700">⌨️ 단축키:</span>
@@ -5277,13 +5461,21 @@ ${feedbackList.slice(-3).join('\n')}
                       {playingId === item.id && activeSpeakerIndicator && (
                         <div className="skeuo-lcd p-2.5 flex items-center justify-between animate-fade-in text-xs font-mono no-print">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm animate-pulse">🎧</span>
+                            <span className="text-sm animate-pulse">{activeSpeakerIndicator.isOfficial ? '📻' : '🎧'}</span>
                             <span className="font-bold tracking-wide flex items-center gap-1.5">
-                              <span>{activeSpeakerIndicator.role === 'M' ? '👨 남성' : '👩 여성'} 화자:</span>
-                              <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${activeSpeakerIndicator.isGoogleAi ? 'bg-teal-900 text-teal-200 border border-teal-500/30' : 'bg-slate-800 text-white'}`}>
-                                {activeSpeakerIndicator.name}
-                              </span>
-                              <span>발화 중...</span>
+                              {activeSpeakerIndicator.isOfficial ? (
+                                <span className="text-[#00ff9d]">
+                                  {activeSpeakerIndicator.name}
+                                </span>
+                              ) : (
+                                <>
+                                  <span>{activeSpeakerIndicator.role === 'M' ? '👨 남성' : '👩 여성'} 화자:</span>
+                                  <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${activeSpeakerIndicator.isGoogleAi ? 'bg-teal-900 text-teal-200 border border-teal-500/30' : 'bg-slate-800 text-white'}`}>
+                                    {activeSpeakerIndicator.name}
+                                  </span>
+                                  <span>발화 중...</span>
+                                </>
+                              )}
                             </span>
                           </div>
                           <div className="flex gap-1 items-end h-3 opacity-90">
