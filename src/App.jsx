@@ -27,6 +27,8 @@ import {
 import { callUnifiedLlm as rawCallUnifiedLlm } from './services/llmService';
 import { RadarChartWidget } from './components/RadarChartWidget';
 import { PhoneticRadarWidget, PHONETIC_RULE_KEYS } from './components/PhoneticRadarWidget';
+import { PitchContourCanvas } from './components/PitchContourCanvas';
+import { RealtimePitchTracker } from './utils/pitchTracker';
 
     export default function App() {
       // 보안 디코더 (GitHub Secret Scanning 방지 및 안전한 로컬 보관)
@@ -119,6 +121,12 @@ import { PhoneticRadarWidget, PHONETIC_RULE_KEYS } from './components/PhoneticRa
       const [activeSentenceShadowingKey, setActiveSentenceShadowingKey] = useState(null); // "${itemId}_${lineIdx}"
       const [sentenceShadowingResults, setSentenceShadowingResults] = useState({}); // { [sentenceKey]: analysisResult }
       const sentenceRecognitionRef = useRef(null);
+
+      // [신규 고도화] 억양 피치 캔버스 및 실시간 피치 트래커 상태
+      const [expandedPitchCanvasKey, setExpandedPitchCanvasKey] = useState(null); // "${itemId}_line_${lIdx}"
+      const [sentencePitchSamplesMap, setSentencePitchSamplesMap] = useState({}); // { [sentenceKey]: [{ time, pitch }] }
+      const [livePitchSample, setLivePitchSample] = useState(null);
+      const pitchTrackerRef = useRef(null);
 
       // [신규 3단계 고도화] 7대 음운 규칙 취약점 상태 및 차트 모드
       const [radarMode, setRadarMode] = useState('phonetic'); // 'phonetic' (7대 음운 취약점) | 'general' (6대 전투력)
@@ -1543,6 +1551,11 @@ import { PhoneticRadarWidget, PHONETIC_RULE_KEYS } from './components/PhoneticRa
           } catch(e) {}
           sentenceRecognitionRef.current = null;
         }
+        if (pitchTrackerRef.current) {
+          try { pitchTrackerRef.current.stop(); } catch(e) {}
+          pitchTrackerRef.current = null;
+        }
+        setLivePitchSample(null);
         setActiveSentenceShadowingKey(null);
         setPlayingId(null); 
         setIsPaused(false); 
@@ -1755,15 +1768,31 @@ import { PhoneticRadarWidget, PHONETIC_RULE_KEYS } from './components/PhoneticRa
           if (sentenceRecognitionRef.current) {
             try { sentenceRecognitionRef.current.stop(); } catch(e) {}
           }
+          if (pitchTrackerRef.current) {
+            const samples = pitchTrackerRef.current.stop();
+            setSentencePitchSamplesMap(prev => ({
+              ...prev,
+              [sentenceKey]: samples
+            }));
+            pitchTrackerRef.current = null;
+          }
+          setLivePitchSample(null);
           setActiveSentenceShadowingKey(null);
-          showToast("쉐도잉 녹음이 완료되었습니다.", "success");
+          showToast("쉐도잉 녹음 및 억양 분석이 완료되었습니다.", "success");
           return;
         }
 
         if (sentenceRecognitionRef.current) {
           try { sentenceRecognitionRef.current.stop(); } catch(e) {}
         }
+        if (pitchTrackerRef.current) {
+          try { pitchTrackerRef.current.stop(); } catch(e) {}
+          pitchTrackerRef.current = null;
+        }
         stopSpeech();
+
+        // 억양 피치 캔버스 자동 펼치기
+        setExpandedPitchCanvasKey(sentenceKey);
 
         const recognition = new SpeechRec();
         recognition.continuous = true;
@@ -1772,6 +1801,16 @@ import { PhoneticRadarWidget, PHONETIC_RULE_KEYS } from './components/PhoneticRa
 
         setActiveSentenceShadowingKey(sentenceKey);
         sentenceRecognitionRef.current = recognition;
+
+        // 실시간 피치 트래커 활성화
+        const tracker = new RealtimePitchTracker((sample) => {
+          setLivePitchSample(sample);
+        });
+        tracker.start().then(success => {
+          if (success) {
+            pitchTrackerRef.current = tracker;
+          }
+        });
 
         recognition.onresult = (e) => {
           const spoken = Array.from(e.results).map(r => r[0].transcript).join(' ').trim();
@@ -1783,11 +1822,25 @@ import { PhoneticRadarWidget, PHONETIC_RULE_KEYS } from './components/PhoneticRa
         };
 
         recognition.onend = () => {
+          if (pitchTrackerRef.current) {
+            const samples = pitchTrackerRef.current.stop();
+            setSentencePitchSamplesMap(prev => ({
+              ...prev,
+              [sentenceKey]: samples
+            }));
+            pitchTrackerRef.current = null;
+          }
+          setLivePitchSample(null);
           setActiveSentenceShadowingKey(null);
         };
 
         recognition.onerror = (e) => {
           console.warn("문장 쉐도잉 음성 인식 오류:", e);
+          if (pitchTrackerRef.current) {
+            try { pitchTrackerRef.current.stop(); } catch(err) {}
+            pitchTrackerRef.current = null;
+          }
+          setLivePitchSample(null);
           setActiveSentenceShadowingKey(null);
           if (e.error !== 'no-speech' && e.error !== 'aborted') {
             showToast("마이크 음성 인식 오류가 발생했습니다. 권한을 확인해주세요.", "error");
@@ -1799,6 +1852,11 @@ import { PhoneticRadarWidget, PHONETIC_RULE_KEYS } from './components/PhoneticRa
           showToast("🎙️ 마이크 ON: 화면의 문장을 원어민처럼 소리 내어 읽으세요!", "info");
         } catch (err) {
           console.warn("recognition.start() 오류:", err);
+          if (pitchTrackerRef.current) {
+            try { pitchTrackerRef.current.stop(); } catch(e) {}
+            pitchTrackerRef.current = null;
+          }
+          setLivePitchSample(null);
           setActiveSentenceShadowingKey(null);
         }
       };
@@ -5831,7 +5889,7 @@ ${feedbackList.slice(-3).join('\n')}
                                     <span className="font-medium text-slate-900 leading-snug">{clean}</span>
                                   </div>
 
-                                  {/* 인라인 제어 버튼 (한 문장 듣기 & 따라 말하기) */}
+                                  {/* 인라인 제어 버튼 (한 문장 듣기 & 따라 말하기 & 억양 피치 보기) */}
                                   <div className="flex items-center gap-1.5 shrink-0 no-print">
                                     <button
                                       type="button"
@@ -5849,9 +5907,21 @@ ${feedbackList.slice(-3).join('\n')}
                                           ? 'skeuo-btn-red text-white animate-pulse shadow-md' 
                                           : 'skeuo-btn-teal text-white shadow-xs'
                                       )}
-                                      title="마이크로 이 문장을 따라 말하고 발음을 1:1 대조 채점받습니다."
+                                      title="마이크로 이 문장을 따라 말하고 발음과 억양 피치를 1:1 정밀 채점받습니다."
                                     >
                                       <span>{isRecordingThis ? '⏹ 녹음 완료' : '🎙️ 따라 말하기'}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedPitchCanvasKey(prev => prev === sentKey ? null : sentKey)}
+                                      className={'skeuo-btn px-2 py-1 text-[11px] font-bold flex items-center gap-1 transition-all ' + (
+                                        expandedPitchCanvasKey === sentKey
+                                          ? 'bg-slate-800 text-sky-300 border-slate-700 shadow-inner'
+                                          : 'text-slate-700 hover:text-slate-900'
+                                      )}
+                                      title="원어민 표준 억양과 내 발화 억양 피치 곡선(Pitch Contour)을 겹쳐서 비교합니다."
+                                    >
+                                      <span>📈 {expandedPitchCanvasKey === sentKey ? '억양 닫기' : '억양 피치'}</span>
                                     </button>
                                   </div>
                                 </div>
@@ -5908,6 +5978,18 @@ ${feedbackList.slice(-3).join('\n')}
                                         🗣️ 인식된 발화: <span className="text-slate-800 font-sans italic">"{shadowResult.recognizedText}"</span>
                                       </div>
                                     )}
+                                  </div>
+                                )}
+
+                                {/* [신규 고도화] 📈 인라인 확장형 듀얼 억양 피치 캔버스 */}
+                                {expandedPitchCanvasKey === sentKey && (
+                                  <div className="mt-2.5 animate-fade-in no-print">
+                                    <PitchContourCanvas
+                                      sentenceText={clean}
+                                      userPitchSamples={sentencePitchSamplesMap[sentKey] || []}
+                                      isRecording={isRecordingThis}
+                                      liveSample={isRecordingThis ? livePitchSample : null}
+                                    />
                                   </div>
                                 )}
                               </div>
