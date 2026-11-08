@@ -4,8 +4,6 @@ import {
   GOOGLE_SCRIPT_URL, 
   EXAM_BANK_PRESETS, 
   FALLBACK_EXAM,
-  DEFAULT_SECURE_UPSTAGE,
-  DEFAULT_SECURE_GEMINI,
   DEFAULT_SECURE_GOOGLE_CLIENT_ID
 } from './constants/examPresets';
 import { OFFICIAL_EXAM_LIBRARY } from './data/examLibrary';
@@ -31,13 +29,7 @@ import { PitchContourCanvas } from './components/PitchContourCanvas';
 import { RealtimePitchTracker } from './utils/pitchTracker';
 
     export default function App() {
-      // 보안 디코더 (GitHub Secret Scanning 방지 및 안전한 로컬 보관)
-      const decodeSecureKey = (encoded) => {
-        try { return atob(encoded); } catch(e) { return ''; }
-      };
-      const DEFAULT_SECURE_UPSTAGE = "dXNfVFRQbnBZOWxKTk1wZkRqWmxwcnlYQkNPSEYzNkk=";
-      const DEFAULT_SECURE_GEMINI = "QUl6YVN5RHpMRDV4S0ROVUtvTVJ4djMzUWppMldQaHEta0JPVVpz";
-      const DEFAULT_SECURE_GOOGLE_CLIENT_ID = "MTIzOTgzNDQ3OTAwLXNpdXRtMjgyNzAwa2luNG9oZzVrbm43Z2tkZ2hlN2Q1LmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29t";
+      // 공개 로그인 설정만 기본값을 사용하며, AI API 키는 사용자가 직접 입력합니다.
 
       // 1. 상태 관리
       const [examState, setExamState] = useState('login'); // login | idle | generating | taking | evaluating | result | teacher_login | teacher_dashboard
@@ -279,12 +271,12 @@ import { RealtimePitchTracker } from './utils/pitchTracker';
 
       // AI 엔진 선택 및 키 관리 (주력 엔진: Google Gemini 초고속 체인 & 보조: Upstage Solar Pro)
       const [aiEngine, setAiEngine] = useState(() => localStorage.getItem('ai_engine_type') || 'gemini'); // 기본값: Google Gemini
-      const [upstageApiKey, setUpstageApiKey] = useState(() => localStorage.getItem('upstage_api_key') || decodeSecureKey(DEFAULT_SECURE_UPSTAGE));
-      const [upstageKeyInput, setUpstageKeyInput] = useState(() => localStorage.getItem('upstage_api_key') || decodeSecureKey(DEFAULT_SECURE_UPSTAGE));
+      const [upstageApiKey, setUpstageApiKey] = useState(() => localStorage.getItem('upstage_api_key') || '');
+      const [upstageKeyInput, setUpstageKeyInput] = useState(() => localStorage.getItem('upstage_api_key') || '');
 
-      // Gemini API Key 설정 상태 (Google AI Studio 무료 API 키 기본 안전 연동)
-      const [customApiKey, setCustomApiKey] = useState(() => localStorage.getItem('gemini_api_key') || decodeSecureKey(DEFAULT_SECURE_GEMINI));
-      const [apiKeyInput, setApiKeyInput] = useState(() => localStorage.getItem('gemini_api_key') || decodeSecureKey(DEFAULT_SECURE_GEMINI));
+      // Gemini API Key 설정 상태 (사용자가 직접 입력한 개인 키만 사용)
+      const [customApiKey, setCustomApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+      const [apiKeyInput, setApiKeyInput] = useState(() => localStorage.getItem('gemini_api_key') || '');
       const [showKeyModal, setShowKeyModal] = useState(false);
 
       // Google AI Studio 공식 음성 라인업 및 글로벌 잉글리시(미국/영국/호주/캐나다/인도) 보이스 프로필
@@ -4043,7 +4035,7 @@ ${feedbackList.slice(-3).join('\n')}
                 <div className="p-3 bg-gradient-to-r from-teal-50 to-blue-50 rounded-xl border border-teal-200 text-xs text-slate-800 space-y-2">
                   <div className="flex justify-between items-center">
                     <span className="font-black text-teal-900 flex items-center gap-1.5">
-                      <span>✨ Google AI Studio 무료 Gemini API 연동 상태</span>
+                      <span>✨ Google AI Studio Gemini API 연동 상태</span>
                     </span>
                     {customApiKey ? (
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-600 text-white shadow-xs">
@@ -4056,14 +4048,14 @@ ${feedbackList.slice(-3).join('\n')}
                     )}
                   </div>
                   <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
-                    Google AI Studio에서 발급받은 무료 Gemini API Key를 입력하시면 즉시 스튜디오급 원어민 음성(Puck, Aoede 등)으로 청취할 수 있으며, 미등록 시에도 시스템의 남/녀 분리 음성으로 자동 재생됩니다.
+                    본인 Gemini API 키를 입력하면 원어민 음성을 사용할 수 있습니다. 키가 없어도 내장 문제와 브라우저 음성을 사용할 수 있습니다. 무료 여부와 사용 한도는 본인 계정에서 확인하세요.
                   </p>
                   <div className="flex gap-2">
                     <input
                       type="password"
                       value={apiKeyInput}
                       onChange={(e) => setApiKeyInput(e.target.value)}
-                      placeholder="AIzaSy... (Google AI Studio 무료 API Key)"
+                      placeholder="AIzaSy... (본인 Google AI Studio API 키)"
                       className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold bg-white text-slate-800 outline-none focus:ring-2 focus:ring-teal-500 shadow-inner"
                     />
                     <button
@@ -4073,7 +4065,7 @@ ${feedbackList.slice(-3).join('\n')}
                         setCustomApiKey(trimmed);
                         if (trimmed) {
                           localStorage.setItem('gemini_api_key', trimmed);
-                          showToast("Google AI Studio 무료 API 키가 저장되었습니다!", "success");
+                          showToast("본인 Gemini API 키가 이 브라우저에 저장되었습니다.", "success");
                         } else {
                           localStorage.removeItem('gemini_api_key');
                           showToast("API 키가 초기화되어 브라우저 분리 음성 모드로 작동합니다.", "info");
@@ -4375,7 +4367,7 @@ ${feedbackList.slice(-3).join('\n')}
                         className="w-full border border-slate-300 rounded-lg p-2.5 text-xs font-mono font-bold bg-white text-slate-800 outline-none focus:ring-2 focus:ring-teal-500 shadow-inner"
                       />
                       <span className="text-[10px] text-slate-400 block font-medium">
-                        * 보안 안내: API 키는 브라우저 로컬 스토리지에만 보관되며 외부로 노출되지 않습니다.
+                        * 보안 안내: API 키는 이 브라우저에 저장되며 AI 요청 시 해당 제공자에게 전송됩니다. 공용 기기에서는 사용 후 키를 삭제하세요.
                       </span>
                     </div>
                   </div>
