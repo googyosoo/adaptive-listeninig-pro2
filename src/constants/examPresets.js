@@ -367,7 +367,5 @@ export const EXAM_BANK_PRESETS = {
 
 export const FALLBACK_EXAM = EXAM_BANK_PRESETS.round1.items;
 
-// 보안 기본 디폴트 키 (암호화된 문자열)
-export const DEFAULT_SECURE_UPSTAGE = "dXNfVFRQbnBZOWxKTk1wZkRqWmxwcnlYQkNPSEYzNkk=";
-export const DEFAULT_SECURE_GEMINI = "QUl6YVN5RHpMRDV4S0ROVUtvTVJ4djMzUWppMldQaHEta0JPVVpz";
+// 공개 OAuth 클라이언트 ID입니다. AI API 비밀키는 기본값으로 제공하지 않습니다.
 export const DEFAULT_SECURE_GOOGLE_CLIENT_ID = "MTIzOTgzNDQ3OTAwLXNpdXRtMjgyNzAwa2luNG9oZzVrbm43Z2tkZ2hlN2Q1LmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29t";

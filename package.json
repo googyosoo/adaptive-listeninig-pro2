@@ -7,10 +7,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "predeploy": "npm run build",
+    "predeploy": "npm run test:security && npm run build",
     "deploy": "gh-pages -d dist",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:security": "node --test tests/api-key-security.test.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
